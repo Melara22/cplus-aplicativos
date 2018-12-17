@@ -56447,6 +56447,12 @@ $app->post('/function', function ($request,$response) {
 
 });
 
+$app->get('/', function ($request,$response) {
+
+return "C+ API";
+
+});
+
 
 /************************ VERSION 1.0.1 LEADER *************************/
 
