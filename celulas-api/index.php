@@ -56443,13 +56443,12 @@ $app->post('/function', function ($request,$response) {
                  "message"=> $ex->getMessage(),
                  "status"=>422)),422);
   }
-  }
 
 });
 
 $app->get('/', function ($request,$response) {
 
-return "C+ API";
+ return "C+ API";
 
 });
 
