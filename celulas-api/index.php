@@ -56446,12 +56446,6 @@ $app->post('/function', function ($request,$response) {
 
 });
 
-$app->get('/', function ($request,$response) {
-
- return "C+ API";
-
-});
-
 
 /************************ VERSION 1.0.1 LEADER *************************/
 
@@ -58450,7 +58444,7 @@ $app->post('/settings/contact-us', function ($request,$response) {
              ->withJson(array('error' => array(
                "message"=>"Parámetro faltante: mensaje",
                "status"=>500)));
-   } 
+   }
 
    // if exist user
    $pre = $con->prepare("SELECT *
@@ -58475,79 +58469,18 @@ $app->post('/settings/contact-us', function ($request,$response) {
    $name = $result['first_name'];
    $email = $result['email'];
 
-
-   $mail = new PHPMailer;
-   //Enable SMTP debugging. 
-   // $mail->SMTPDebug = 3;                               
-   //Set PHPMailer to use SMTP.
-   $mail->isSMTP();            
-   //Set SMTP host name                          
-   $mail->Host = "smtp.gmail.com";
-   //Set this to true if SMTP host requires authentication to send email
-   $mail->SMTPAuth = true;                          
-   //Provide username and password     
-   $mail->Username = "hola@cplusapp.com";                 
-   $mail->Password = "7L7RorYPxYAV2Cj";                        
-   //If SMTP requires TLS encryption then set it
-   $mail->SMTPSecure = "tls";                           
-   //Set TCP port to connect to 
-   $mail->Port = 587;                                   
-
-   $mail->CharSet = "UTF-8";
-   $mail->From = $email;
-   $mail->FromName = $name;
-
-   $mail->addAddress('david.tobar@elaniin.com');
-
-   $mail->isHTML(true);
-
-   $mail->Subject = $subject;
-   $mail->Body = "
-   <html>
-   <head>
-   <link href='https://fonts.googleapis.com/css?family=Open+Sans' rel='stylesheet'>
-   <style>
-     p{
-      font-family: 'Open Sans', sans-serif !important;
-      font-size: 15px;
-     }
-     .invite{
-      background-color: rgb(78, 206, 61);
-      color: #fff !important;
-      padding: 10px;
-      border-radius: 5px;
-      text-decoration: none;
-     }
-     .parag{
-        text-align: center;
-      }
-      .part{
-        margin-bottom: 40px;
-      }
-      .final{
-        margin-top: 30px;
-        font-size: 12px;
-      }
-   </style>
-   </head>
-   <body>
-   <p>$message</p><p class='final'>From: $name $email</p></body></html>";
-   $mail->AltBody = $subject;
-
-   if(!$mail->send()) {
-
-     return $response->withStatus(422)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"help_mail",
-               "message"=>"El correo no pudo ser enviado.",
-               "Mailer Error:"=>$mail->ErrorInfo,
-               "status"=>422)));
-   } else {
-     return $response->withStatus(200)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('response' => 
+   if(contactMail($email,$name,$subject,$message)){
+      return $response->withStatus(200)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('response' => 
                array("message"=>"¡Mensaje enviado!", 'email' => $email)));
+   }else{
+      return $response->withStatus(422)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('error' => array(
+                "type"=>"help_mail",
+                "message"=>"El correo no pudo ser enviado.",
+                "status"=>422)));
    }
 
  }
@@ -65671,46 +65604,141 @@ $app->post('/members/cell-members/assign-steps', function ($request,$response) {
 });
 
 
+/******* TESTS ********/
+$app->post('/send-mail', function ($request,$response) {
+
+  try{
+
+    $con = $this->db;
+    $bodyMail = $request->getParam('bodyMail');
+    $email = $request->getParam('email');
+    $subject = $request->getParam('subject');
+
+    if(sendEmail($bodyMail,$email,$subject)){
+        return $response->withStatus(200)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('response' => 'invitation_sent'));
+    }else{
+      return $response->withStatus(422)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('error' => "invitation_not_sent"));
+    }
+
+ }
+ catch(\Exception $ex){
+   return $response->withJson(array('error' => array(
+                "message"=> $ex->getMessage(),
+                "status"=>422)),422);
+ }
+
+});
+
+
 /*********** General functions ***********/
 
 function sendEmail($bodyMail,$email,$subject){
 
-  $mail_c = new PHPMailer;                           
-  //Set PHPMailer to use SMTP.
-  $mail_c->isSMTP();          
-  //Set SMTP host name                          
-  $mail_c->Host = "smtp.gmail.com";
-  //Set this to true if SMTP host requires authentication to send email
-  $mail_c->SMTPAuth = true;                          
-  //Provide username and password     
-  // $mail_c->Username = "developerelaniin@gmail.com";                 
-  // $mail_c->Password = "prU@@bs10";
-  $mail_c->Username = "hola@cplusapp.com";                 
-  $mail_c->Password = "7L7RorYPxYAV2Cj";                           
-  //If SMTP requires TLS encryption then set it
-  $mail_c->SMTPSecure = "tls";                           
-  //Set TCP port to connect to 
-  $mail_c->Port = 587;                                   
+  $url = "http://newcelulasapi.toolboxsv.com/general/send-mail";
 
-  $mail_c->CharSet = "UTF-8";
-  $mail_c->From = "hola@cplusapp.com";
-  $mail_c->FromName = "C+";
+  $ch = curl_init();
+  curl_setopt($ch, CURLOPT_URL, $url);
+  curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: application/x-www-form-urlencoded'));
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+  curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+  curl_setopt($ch, CURLOPT_POST, 1);
+  curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+  curl_setopt($ch, CURLOPT_POSTFIELDS, "bodyMail=$bodyMail&email=$email&subject=$subject");
+  curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
 
-  $mail_c->addAddress($email);
+  $result = curl_exec($ch);
+  curl_close($ch);
 
-  $mail_c->isHTML(true);
+  if ($result) {
 
-  $mail_c->Subject = $subject;
-  $mail_c->Body = $bodyMail;
-  $mail_c->AltBody = $subject;
+    $obj = json_decode($result);
 
-  if($mail_c->send()){
+    if ($obj->type == 'sent') {
       return true;
-  }else{
+    }else{
       return false;
+    }
+
+  }else{
+    return false;
   }
+  
+
+  // $mail_c = new PHPMailer;                           
+  // //Set PHPMailer to use SMTP.
+  // $mail_c->isSMTP();          
+  // //Set SMTP host name                          
+  // $mail_c->Host = "smtp.gmail.com";
+  // //Set this to true if SMTP host requires authentication to send email
+  // $mail_c->SMTPAuth = true;                          
+  // //Provide username and password     
+  // // $mail_c->Username = "developerelaniin@gmail.com";                 
+  // // $mail_c->Password = "prU@@bs10";
+  // $mail_c->Username = "hola@cplusapp.com";                 
+  // $mail_c->Password = "7L7RorYPxYAV2Cj";                           
+  // //If SMTP requires TLS encryption then set it
+  // $mail_c->SMTPSecure = "tls";                           
+  // //Set TCP port to connect to 
+  // $mail_c->Port = 587;                                   
+
+  // $mail_c->CharSet = "UTF-8";
+  // $mail_c->From = "hola@cplusapp.com";
+  // $mail_c->FromName = "C+";
+
+  // $mail_c->addAddress($email);
+
+  // $mail_c->isHTML(true);
+
+  // $mail_c->Subject = $subject;
+  // $mail_c->Body = $bodyMail;
+  // $mail_c->AltBody = $subject;
+
+  // if($mail_c->send()){
+  //     return true;
+  // }else{
+  //     return false;
+  // }
 
 }
+
+function contactMail($email,$name,$subject,$message){
+
+  $url = "http://newcelulasapi.toolboxsv.com/general/contact-mail";
+
+  $ch = curl_init();
+  curl_setopt($ch, CURLOPT_URL, $url);
+  curl_setopt($ch, CURLOPT_HTTPHEADER, array('Content-Type: application/x-www-form-urlencoded'));
+  curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+  curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+  curl_setopt($ch, CURLOPT_POST, 1);
+  curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+  curl_setopt($ch, CURLOPT_POSTFIELDS, "name=$name&email=$email&subject=$subject&message=$message");
+  curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
+
+  $result = curl_exec($ch);
+  curl_close($ch);
+
+  if ($result) {
+
+    $obj = json_decode($result);
+
+    if ($obj->type == 'sent') {
+      return true;
+    }else{
+      return false;
+    }
+
+  }else{
+    return false;
+  }
+
+
+}
+
 
 function moveUploadedChurch($directory, UploadedFile $uploadedFile)
 {
