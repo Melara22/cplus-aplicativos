@@ -56702,7 +56702,7 @@ $app->post('/general/temporary-invitation-leader', function ($request,$response)
     $guest_since = date("Y-m-d");
 
     // create leader
-    $pre_cell2 = $con->prepare("INSERT INTO user (`id`, `church_id`, `token`, `first_name`, `last_name`, `email`, `password`, `phone`, `address`, `city`, `gender`, `birth_date`, `marital_status`, `married_since`, `guest_since`, `member_since`, `profile_picture`, `rol`, `exelerate_id`, `verify_code`, `verified_account`,`status`, `newsletter`, `review_terms`, `remember_me`, `created_at`, `updated_at`) VALUES (NULL, :church_id, '$token_c', :name, :last_name, :email, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'5','$exe', '$code_c', '0' ,'0', '1' , '', '', '$today', '$today')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+    $pre_cell2 = $con->prepare("INSERT INTO user (`id`, `church_id`, `token`, `first_name`, `last_name`, `email`, `password`, `phone`, `address`, `city`, `gender`, `birth_date`, `marital_status`, `married_since`, `guest_since`, `member_since`, `profile_picture`, `rol`, `exelerate_id`, `verify_code`, `verified_account`,`status`, `newsletter`, `review_terms`, `remember_me`, `created_at`, `updated_at`) VALUES (NULL, :church_id, '$token_c', :name, :last_name, :email, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'5','$exe', '$code_c', '0' ,'0', '1' , '0', '0', '$today', '$today')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
     $values_cell2 = array(
       ':email' => $email,
@@ -57237,7 +57237,7 @@ $app->post('/general/temporary-invitation', function ($request,$response) use ($
     $guest_since = date("Y-m-d");
 
     // create leader
-    $pre_cell2 = $con->prepare("INSERT INTO user (`id`, `church_id`, `token`, `first_name`, `last_name`, `email`, `password`, `phone`, `address`, `city`, `gender`, `birth_date`, `marital_status`, `married_since`, `guest_since`, `member_since`, `profile_picture`, `rol`, `exelerate_id`, `verify_code`, `verified_account`,`status`, `newsletter`, `review_terms`, `remember_me`, `created_at`, `updated_at`) VALUES (NULL, :church_id, '$token_c', :name, :last_name, :email, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'5','$exe', '$code_c', '0' ,'0', '1' , '', '', '$today', '$today')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+    $pre_cell2 = $con->prepare("INSERT INTO user (`id`, `church_id`, `token`, `first_name`, `last_name`, `email`, `password`, `phone`, `address`, `city`, `gender`, `birth_date`, `marital_status`, `married_since`, `guest_since`, `member_since`, `profile_picture`, `rol`, `exelerate_id`, `verify_code`, `verified_account`,`status`, `newsletter`, `review_terms`, `remember_me`, `created_at`, `updated_at`) VALUES (NULL, :church_id, '$token_c', :name, :last_name, :email, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'5','$exe', '$code_c', '0' ,'0', '1' , '0', '0', '$today', '$today')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
     $values_cell2 = array(
       ':email' => $email,
