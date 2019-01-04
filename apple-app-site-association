@@ -5,6 +5,10 @@
             {
                 "appID": "AHZ59YEKXK.com.sharesv.cplus.ios",
                 "paths": [ "/*"]
+            },
+            {
+                "appID": "AHZ59YEKXK.com.sharesv.cplus.ios",
+                "paths": [ "*" ]
             }
         ]
     }
