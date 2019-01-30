@@ -164,7 +164,7 @@ if ($result = mysqli_query($link, $cells)) {
         $currentWeekNumber = date('W', strtotime($today. ' + 1 days'));
 
         $fweek = '0';
-        $fweek = $currentWeekNumber;
+        $fweek = intval($currentWeekNumber);
 
         if($currentWeekNumber > '13'){
           if ($currentWeekNumber == '14') {

@@ -10,12 +10,14 @@ use Slim\Http\UploadedFile;
 date_default_timezone_set('America/El_Salvador');
 
 require 'vendor/autoload.php';
-
 require 'tcpdf_include.php';
 
 include 'config.php';
 
 $app = new Slim\App(["settings" => $config]);
+
+// routes
+require 'routes/api.php';
 
 //Handle Dependencies
 
@@ -40,7 +42,9 @@ $container['db'] = function ($c) {
 
 };
 
-// $container = $app->getContainer();
+// Call Controllers
+require 'app/dependencies.php';
+
 $container['upload_directory'] = __DIR__ . '/uploads/user';
 
 $app->options('/{routes:.+}', function ($request, $response, $args) {
@@ -59,6 +63,11 @@ $app->add(function ($req, $res, $next) {
 $app->host = 'http://celulas.netlify.com';
 $app->user_directory = "../uploads-celulas-api/user/";
 $app->user_url = "http://toolboxsv.com/dev/uploads-celulas-api/user";
+
+/**************** PRINCIPAL ****************/
+$app->get('/', function ($request,$response) {
+  return "API C+";
+});
 
 /**************** REGISTER ****************/
 
@@ -1883,11 +1892,11 @@ $app->post('/church-address-validation', function ($request,$response) {
     curl_setopt($ch,CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_TIMEOUT, 10);
     
-    $result = curl_exec($ch);
+    $result_map = curl_exec($ch);
 
     curl_close($ch);
 
-    $data = json_decode($result);
+    $data = json_decode($result_map);
 
     if($data->status == "OK"){
 
@@ -1956,296 +1965,6 @@ $app->post('/validate-subdomain', function ($request,$response) {
                     "message"=>"Subdomain does not exist",
                     "valid"=>'false')));
       }
-
- }
- catch(\Exception $ex){
-   return $response->withJson(array('error' => array(
-                "message"=> $ex->getMessage(),
-                "status"=>422)),422);
- }
-
-});
-
-
-$app->post('/login', function ($request,$response) {
-
-  try{
-
-     $con = $this->db; 
-     $email = $request->getParam('email');
-     $password = md5($request->getParam('password'));
-
-     if(empty($email)){
-       return $response->withStatus(500)
-               ->withHeader('Content-Type', 'application/json')
-               ->withJson(array('error' => array(
-                "type"=>"required",
-                 "message"=>"Parámetro faltante: email",
-                 "status"=>500)));
-     }  else if(empty($password)){
-        return $response->withStatus(500)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                  "type"=>"required",
-                  "message"=>"Parámetro faltante: password",
-                  "status"=>500)));
-    }
-
-    // verify if email exist
-    $pre_em = $con->prepare("SELECT *
-                             FROM user
-                             WHERE email = :email",
-                             array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-    $values_em = array(':email' => $email);
-    $pre_em->execute($values_em);
-    $result_em = $pre_em->fetch();
-
-    if (!$result_em) {
-      return $response->withStatus(422)
-              ->withHeader('Content-Type', 'application/json')
-              ->withJson(array('error' => array(
-                  "type"=>"wrong_mail",
-                  "message"=>"¡Ups! el correo es incorrecto.",
-                  "status"=>422)));
-    }
-
-    $church_id = $result_em['church_id'];
-
-    // check if password is correct
-    $pre_pass = $con->prepare("SELECT *
-                             FROM user
-                             WHERE email = :email
-                             AND password = :password", 
-                             array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-    $values_pass = array(':email' => $email, ':password' => $password);
-    $pre_pass->execute($values_pass);
-    $result_pass = $pre_pass->fetch();
-
-    if (!$result_pass) {
-      return $response->withStatus(422)
-              ->withHeader('Content-Type', 'application/json')
-              ->withJson(array('error' => array(
-                  "type"=>"wrong_password",
-                  "message"=>"¡Ups! la contraseña es incorrecta.",
-                  "status"=>422)));
-    }
-
-    // check if account is active
-    $sql = "SELECT *
-            FROM `user`
-            WHERE `email` = :email
-            AND `password` = :password AND church_id = :church_id AND status ='1' AND verified_account = '1'";
-    $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-    $values = array(
-      ':email' => $email,
-      ':password' => $password,
-      ':church_id' => $church_id
-      );
-    
-    $result = $pre->execute($values);
-    $result = $pre->fetch();
-
-    if(!$result){
-      return $response->withStatus(422)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                          "type"=>"inactive_account",
-                          "message"=>"¡Ups! Su cuenta no se encuentra activa.",
-                          "status"=>422)));
-    }
-
-    $user_i = $result['id'];
-
-    // Roles
-    $user_rol = null;
-    $final_gro = null;
-
-    if ($result['rol'] == '1') {
-      $user_rol = 'Senior Pastor';
-    } else if ($result['rol'] == '2') {
-      $user_rol = 'District Pastor';
-
-      // Select group id and codes
-      $sql_gro = "SELECT district_code, id as district_id FROM groups_districts WHERE district_pastor = :user_id AND church_id = :church_id";
-      $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-      $values_gro = array(
-        ':user_id' => $user_i,
-        ':church_id' => $church_id
-        );
-      
-      $result_gro = $pre_gro->execute($values_gro);
-      $result_gro = $pre_gro->fetch();
-
-      // verify if the user does not have a group assigned
-      if (!$result_gro) {
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "type"=>"not_assigned",
-                    "message"=>"¡Ups! lo siento, no puedes acceder. Parece que ya no estás asignado a ningún Distrito.",
-                    "status"=>422)));
-      }
-
-      $final_gro = array(
-        'district_code' => $result_gro['district_code'],
-        'parent_id' => $result_gro['district_id']
-      );
-
-    } else if ($result['rol'] == '3') {
-      $user_rol = 'Zone Pastor';
-
-      // Select group id and codes
-      $sql_gro = "SELECT zone_code, district_code, id as zone_id, district_id FROM `groups_zones` WHERE `zone_pastor` = :user_id AND church_id = :church_id";
-      $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-      $values_gro = array(
-        ':user_id' => $user_i,
-        ':church_id' => $church_id
-        );
-      
-      $result_gro = $pre_gro->execute($values_gro);
-      $result_gro = $pre_gro->fetch();
-
-      // verify if the user does not have a group assigned
-      if (!$result_gro) {
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "type"=>"not_assigned",
-                    "message"=>"¡Ups! lo siento, no puedes acceder. Parece que ya no estás asignado a ninguna Zona.",
-                    "status"=>422)));
-      }
-
-      $final_gro = array(
-        'parent_id' => $result_gro['zone_id'],
-        'zone_code' => $result_gro['zone_code'],
-        'district_id' => $result_gro['district_id'],
-        'district_code' => $result_gro['district_code']
-      );
-
-    } else if ($result['rol'] == '4') {
-      $user_rol = 'Supervisor';
-
-      // Select group id and codes
-      $sql_gro = "SELECT sector_code, zone_code, district_code, id as sector_id, zone_id, (SELECT district_id from groups_zones WHERE groups_zones.id = groups_sectors.zone_id AND groups_zones.church_id = :church_id) as district_id FROM `groups_sectors` WHERE `supervisor` = :user_id AND church_id = :church_id";
-      $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-      $values_gro = array(
-        ':user_id' => $user_i,
-        ':church_id' => $church_id
-        );
-      
-      $result_gro = $pre_gro->execute($values_gro);
-      $result_gro = $pre_gro->fetch();
-
-      // verify if the user does not have a group assigned
-      if (!$result_gro) {
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "type"=>"not_assigned",
-                    "message"=>"¡Ups! lo siento, no puedes acceder. Parece que ya no estás asignado a ningún Sector.",
-                    "status"=>422)));
-      }
-
-      $final_gro = array(
-        'parent_id' => $result_gro['sector_id'],
-        'sector_code' => $result_gro['sector_code'],
-        'zone_id' => $result_gro['zone_id'],
-        'zone_code' => $result_gro['zone_code'],
-        'district_id' => $result_gro['district_id'],
-        'district_code' => $result_gro['district_code']
-      );
-
-    } else if ($result['rol'] == '5') {
-      $user_rol = 'Leader';
-
-      // Select group id and codes
-      $sql_gro = "SELECT cell_code, sector_code, zone_code, district_code, id as cell_id, sector_id, (SELECT zone_id from groups_sectors WHERE groups_sectors.id = groups_cells.sector_id AND groups_sectors.church_id = :church_id) as zone_id, (SELECT district_id from groups_zones WHERE groups_zones.id = zone_id AND groups_zones.church_id = :church_id) as district_id FROM `groups_cells` WHERE `leader` = :user_id AND church_id = :church_id";
-      $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-      $values_gro = array(
-        ':user_id' => $user_i,
-        ':church_id' => $church_id
-        );
-      
-      $result_gro = $pre_gro->execute($values_gro);
-      $result_gro = $pre_gro->fetch();
-
-      // verify if the user does not have a group assigned
-      if (!$result_gro) {
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "type"=>"not_assigned",
-                    "message"=>"¡Ups! lo siento, no puedes acceder. Parece que ya no estás asignado a ninguna Célula.",
-                    "status"=>422)));
-      }
-
-      $final_gro = array(
-        'parent_id' => $result_gro['cell_id'],
-        'cell_code' => $result_gro['cell_code'],
-        'sector_id' => $result_gro['sector_id'],
-        'sector_code' => $result_gro['sector_code'],
-        'zone_id' => $result_gro['zone_id'],
-        'zone_code' => $result_gro['zone_code'],
-        'district_id' => $result_gro['district_id'],
-        'district_code' => $result_gro['district_code']
-      );
-
-    } else if ($result['rol'] == '6') {
-      $user_rol = 'Administrator';
-    } else if ($result['rol'] == '7') {
-      $user_rol = 'Owner';
-    }
-    
-
-    $church_info = "SELECT name AS church_name
-            FROM churches
-            WHERE id = :church_id";
-    $pre_church  = $con->prepare($church_info, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-    $values_church = array(
-      ':church_id' => $church_id
-      );
-    
-    $result_church = $pre_church->execute($values_church);
-    $result_church = $pre_church->fetch();
-
-    /*steps*/
-    $sql_steps = "SELECT step_id,name,step_date
-            FROM user_steps
-            WHERE user_id = $user_i";
-
-    $steps = null;
-
-    foreach ($con->query($sql_steps) as $row) {
-      $steps[] = $row;
-    }
-
-    // obtain settings and notifications for user
-    $pre_sett = $con->prepare("SELECT reports_mail, reports_mobile,members_mail,members_mobile,
-                              news_mail, news_mobile
-                                 FROM user_settings
-                                 WHERE user_id = :user_i", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-    $values_sett = array(':user_i' => $user_i);
-    $pre_sett->execute($values_sett);
-    $result_sett = $pre_sett->fetch();
-
-    if (!$result_sett) {
-      $result_sett = null;
-    }
-
-    return $response->withStatus(200)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('response' => array('message' => 'User exists', 'user_id' => $result['id'],'church_id' => $result['church_id'], 'first_name' => $result['first_name'], 'last_name' => $result['last_name'], 'email' => $result['email'],'phone' => $result['phone'],'address' => $result['address'],'city' => $result['city'],"gender" => $result['gender'],"birth_date" => $result['birth_date'],"marital_status" => $result['marital_status'],"married_since" => $result['married_since'],"guest_since" => $result['guest_since'],"member_since" => $result['member_since'],'profile_picture' => $result['profile_picture'],'role' => $result['rol'],"user_role" => $user_rol,"is_complete" => $result['is_complete'], 'type_user' => 'member-group',"church_name" => $result_church['church_name'],"group" => $final_gro,"steps" => $steps, "notifications" => $result_sett)));
-        
 
  }
  catch(\Exception $ex){
@@ -2356,6 +2075,11 @@ $app->post('/forgot-password', function ($request,$response) use ($app) {
 
     $subject = "Cambio de contraseña";
 
+    $type = 1;
+    $host = $app->host;
+    $password = null;
+    $church_id = null;
+
     $bodyMail = "
     <html>
     <head>
@@ -2366,7 +2090,7 @@ $app->post('/forgot-password', function ($request,$response) use ($app) {
       }
       .invite{
         background-color: rgb(78, 206, 61);
-        color: #fff;
+        color: #fff !important;
         padding: 10px;
         border-radius: 5px;
         text-decoration: none;
@@ -2386,12 +2110,12 @@ $app->post('/forgot-password', function ($request,$response) use ($app) {
     <body>
     <p>Hola, $name</p>
     <p class='part'>Has indicado que olvidaste tu contraseña. Si es así, haz clic aquí para crear una nueva:</p>
-    <p class='parag'><a class='invite' href='$app->host/?type=new_password&email=$user_email' target='_blank'>Reiniciar contraseña</a></p>
+    <p class='parag'><a class='invite' href='$host/?type=new_password&email=$user_email' target='_blank'>Reiniciar contraseña</a></p>
     <p class='final'>Si no querías restablecer tu contraseña, puedes ignorar este correo.<br>La contraseña no se cambiará.</p>
     <p>Con amor,<br>C+ Team.</p>
     </body></html>";
 
-    if(sendEmail($bodyMail,$user_email,$subject)){
+    if(sendEmail($bodyMail,$user_email,$subject,$name,$password,$host,$church_id,$type)){
       return $response->withStatus(200)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('response' => array('message' => '¡El correo fue enviado!', 'email' => $user_email)));
@@ -6569,7 +6293,7 @@ $app->post('/districts/transfer-zone', function ($request,$response) {
                   $pre_dis4 = $con->prepare("UPDATE groups_sectors SET zone_code = :new_code, district_code = :district_code WHERE zone_id = :zone_id AND church_id = :final_church", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
                   $values_dis4 = array(
-                  	 ':district_code' => $district_code,
+                     ':district_code' => $district_code,
                      ':new_code' => $new_code,
                      ':zone_id' => $zone_id,
                      ':final_church' => $final_church
@@ -6581,7 +6305,7 @@ $app->post('/districts/transfer-zone', function ($request,$response) {
                   $pre_dis5 = $con->prepare("UPDATE groups_cells set zone_code = :new_code, district_code = :district_code WHERE sector_id IN (SELECT id from groups_sectors where zone_id = :zone_id) AND church_id = :final_church", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
                   $values_dis5 = array(
-                  	 ':district_code' => $district_code,
+                     ':district_code' => $district_code,
                      ':new_code' => $new_code,
                      ':zone_id' => $zone_id,
                      ':final_church' => $final_church
@@ -6693,7 +6417,7 @@ $app->post('/districts/transfer-zone', function ($request,$response) {
                   $pre_dis4 = $con->prepare("UPDATE groups_sectors SET zone_code = :zone_code, district_code = :district_code WHERE zone_id = :zone_id AND church_id = :final_church", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
                   $values_dis4 = array(
-                  	 ':district_code' => $district_code,
+                     ':district_code' => $district_code,
                      ':zone_code' => $zone_code,
                      ':zone_id' => $zone_id,
                      ':final_church' => $final_church
@@ -6705,7 +6429,7 @@ $app->post('/districts/transfer-zone', function ($request,$response) {
                   $pre_dis5 = $con->prepare("UPDATE groups_cells set zone_code = :zone_code, district_code = :district_code WHERE sector_id IN (SELECT id from groups_sectors where zone_id = :zone_id) AND church_id = :final_church", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
                   $values_dis5 = array(
-                  	 ':district_code' => $district_code,
+                     ':district_code' => $district_code,
                      ':zone_code' => $zone_code,
                      ':zone_id' => $zone_id,
                      ':final_church' => $final_church
@@ -7960,153 +7684,153 @@ $app->post('/cells/reports-list', function ($request,$response) {
 
     if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
 
-		$valid_initial_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$initial_date_range);
-		$valid_end_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$end_date_range);
+    $valid_initial_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$initial_date_range);
+    $valid_end_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$end_date_range);
 
-		if ($initial_date_range || $end_date_range) {
+    if ($initial_date_range || $end_date_range) {
 
-		  if (!$valid_initial_date || !$valid_end_date) {
-		    return $response->withStatus(500)
-		            ->withHeader('Content-Type', 'application/json')
-		            ->withJson(array('error' => array(
-		              "message"=>"You must enter a valid initial date and end date",
-		              "status"=>500)));
-		  } else if($initial_date_range > $end_date_range){
-		    return $response->withStatus(500)
-		            ->withHeader('Content-Type', 'application/json')
-		            ->withJson(array('error' => array(
-		              "message"=>"Final date must be greater than initial date",
-		              "status"=>500)));
-		  }else if(empty($initial_date_range) || empty($end_date_range)){
-		    return $response->withStatus(500)
-		            ->withHeader('Content-Type', 'application/json')
-		            ->withJson(array('error' => array(
-		              "message"=>"You must enter a valid initial date and end date",
-		              "status"=>500)));
-		  }
-
-
-		  $sql = "SELECT reports.id AS report_id, reports.name, reports.district_code, reports.zone_code, reports.sector_code, reports.cell_code,reports.cell_id, reports.creation_date, (SELECT CONCAT(user.first_name, ' ', user.last_name) FROM user where user.id = groups_cells.leader) AS leader FROM reports, groups_cells WHERE reports.cell_id = groups_cells.id AND groups_cells.church_id = $final_church AND reports.creation_date BETWEEN '$initial_date_range' AND '$end_date_range' ORDER BY reports.creation_date DESC";
-		    
-
-		  foreach ($con->query($sql) as $row) {
-		    $reports[] = $row;
-		  }
-
-		  return $response->withStatus(200)
-		                    ->withHeader('Content-Type', 'application/json')
-		                    ->withJson(array('response' => $reports));
+      if (!$valid_initial_date || !$valid_end_date) {
+        return $response->withStatus(500)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                  "message"=>"You must enter a valid initial date and end date",
+                  "status"=>500)));
+      } else if($initial_date_range > $end_date_range){
+        return $response->withStatus(500)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                  "message"=>"Final date must be greater than initial date",
+                  "status"=>500)));
+      }else if(empty($initial_date_range) || empty($end_date_range)){
+        return $response->withStatus(500)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                  "message"=>"You must enter a valid initial date and end date",
+                  "status"=>500)));
+      }
 
 
+      $sql = "SELECT reports.id AS report_id, reports.name, reports.district_code, reports.zone_code, reports.sector_code, reports.cell_code,reports.cell_id, reports.creation_date, (SELECT CONCAT(user.first_name, ' ', user.last_name) FROM user where user.id = groups_cells.leader) AS leader FROM reports, groups_cells WHERE reports.cell_id = groups_cells.id AND groups_cells.church_id = $final_church AND reports.creation_date BETWEEN '$initial_date_range' AND '$end_date_range' ORDER BY reports.creation_date DESC";
+        
 
-		} else{
+      foreach ($con->query($sql) as $row) {
+        $reports[] = $row;
+      }
 
-		  $sql2 = "SELECT reports.id AS report_id, reports.name, reports.district_code, reports.zone_code, reports.sector_code, reports.cell_code,reports.cell_id, reports.creation_date, (SELECT CONCAT(user.first_name, ' ', user.last_name) FROM user where user.id = groups_cells.leader) AS leader FROM reports, groups_cells WHERE reports.cell_id = groups_cells.id AND groups_cells.church_id = $final_church ORDER BY reports.creation_date DESC";
-		    
-
-		  foreach ($con->query($sql2) as $row2) {
-		    $reports2[] = $row2;
-		  }
-
-		  return $response->withStatus(200)
-		                    ->withHeader('Content-Type', 'application/json')
-		                    ->withJson(array('response' => $reports2));
-
-		}
-
-
-	/*else user is not senior pastor*/
-	}else{
-
-		if(empty($cell_id)){
-    	     return $response->withStatus(500)
-    	             ->withHeader('Content-Type', 'application/json')
-    	             ->withJson(array('error' => array(
-    	               "message"=>"Missing parameter: cell_id",
-    	               "status"=>500)));
-    	}
-
-	    $pre = $con->prepare("SELECT *
-	                             FROM groups_cells
-	                             WHERE id = :cell_id", 
-	                             array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-	    $values = array(':cell_id' => $cell_id);
-	    $pre->execute($values);
-	    $result = $pre->fetch();
-
-
-	    if ($result) {
-
-	      $district_c = $result['district_code'];
-	      $zone_c = $result['zone_code'];
-	      $sector_c = $result['sector_code'];
-	      $cell_c = $result['cell_code'];
-
-	      $valid_initial_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$initial_date_range);
-	      $valid_end_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$end_date_range);
-
-	      if ($initial_date_range || $end_date_range) {
-
-	        if (!$valid_initial_date || !$valid_end_date) {
-	          return $response->withStatus(500)
-	                  ->withHeader('Content-Type', 'application/json')
-	                  ->withJson(array('error' => array(
-	                    "message"=>"You must enter a valid initial date and end date",
-	                    "status"=>500)));
-	        } else if($initial_date_range > $end_date_range){
-	          return $response->withStatus(500)
-	                  ->withHeader('Content-Type', 'application/json')
-	                  ->withJson(array('error' => array(
-	                    "message"=>"Final date must be greater than initial date",
-	                    "status"=>500)));
-	        }else if(empty($initial_date_range) || empty($end_date_range)){
-	          return $response->withStatus(500)
-	                  ->withHeader('Content-Type', 'application/json')
-	                  ->withJson(array('error' => array(
-	                    "message"=>"You must enter a valid initial date and end date",
-	                    "status"=>500)));
-	        }
-
-
-	        $sql = "SELECT reports.id AS report_id, reports.name, reports.district_code, reports.zone_code, reports.sector_code, reports.cell_code,reports.cell_id, reports.creation_date, (SELECT CONCAT(user.first_name, ' ', user.last_name) FROM user where user.id = groups_cells.leader) AS leader FROM reports, groups_cells WHERE reports.cell_id = groups_cells.id AND reports.cell_id = $cell_id AND groups_cells.church_id = $final_church AND reports.creation_date BETWEEN '$initial_date_range' AND '$end_date_range' ORDER BY reports.creation_date DESC";
-	          
-
-	        foreach ($con->query($sql) as $row) {
-	          $reports[] = $row;
-	        }
-
-	        return $response->withStatus(200)
-	                          ->withHeader('Content-Type', 'application/json')
-	                          ->withJson(array('response' => $reports));
+      return $response->withStatus(200)
+                        ->withHeader('Content-Type', 'application/json')
+                        ->withJson(array('response' => $reports));
 
 
 
-	      } else{
+    } else{
 
-	        $sql2 = "SELECT reports.id AS report_id, reports.name, reports.district_code, reports.zone_code, reports.sector_code, reports.cell_code,reports.cell_id, reports.creation_date, (SELECT CONCAT(user.first_name, ' ', user.last_name) FROM user where user.id = groups_cells.leader) AS leader FROM reports, groups_cells WHERE reports.cell_id = groups_cells.id AND reports.cell_id = $cell_id AND groups_cells.church_id = $final_church ORDER BY reports.creation_date DESC";
-	          
+      $sql2 = "SELECT reports.id AS report_id, reports.name, reports.district_code, reports.zone_code, reports.sector_code, reports.cell_code,reports.cell_id, reports.creation_date, (SELECT CONCAT(user.first_name, ' ', user.last_name) FROM user where user.id = groups_cells.leader) AS leader FROM reports, groups_cells WHERE reports.cell_id = groups_cells.id AND groups_cells.church_id = $final_church ORDER BY reports.creation_date DESC";
+        
 
-	        foreach ($con->query($sql2) as $row2) {
-	          $reports2[] = $row2;
-	        }
+      foreach ($con->query($sql2) as $row2) {
+        $reports2[] = $row2;
+      }
 
-	        return $response->withStatus(200)
-	                          ->withHeader('Content-Type', 'application/json')
-	                          ->withJson(array('response' => $reports2));
+      return $response->withStatus(200)
+                        ->withHeader('Content-Type', 'application/json')
+                        ->withJson(array('response' => $reports2));
 
-	      }
+    }
 
-	      
-	    }else{
-	      return $response->withStatus(422)
-	              ->withHeader('Content-Type', 'application/json')
-	              ->withJson(array('error' => array(
-	                  "message"=>"Cell does not exist",
-	                  "status"=>422)));
-	    }
 
-	}
+  /*else user is not senior pastor*/
+  }else{
+
+    if(empty($cell_id)){
+           return $response->withStatus(500)
+                   ->withHeader('Content-Type', 'application/json')
+                   ->withJson(array('error' => array(
+                     "message"=>"Missing parameter: cell_id",
+                     "status"=>500)));
+      }
+
+      $pre = $con->prepare("SELECT *
+                               FROM groups_cells
+                               WHERE id = :cell_id", 
+                               array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+      $values = array(':cell_id' => $cell_id);
+      $pre->execute($values);
+      $result = $pre->fetch();
+
+
+      if ($result) {
+
+        $district_c = $result['district_code'];
+        $zone_c = $result['zone_code'];
+        $sector_c = $result['sector_code'];
+        $cell_c = $result['cell_code'];
+
+        $valid_initial_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$initial_date_range);
+        $valid_end_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$end_date_range);
+
+        if ($initial_date_range || $end_date_range) {
+
+          if (!$valid_initial_date || !$valid_end_date) {
+            return $response->withStatus(500)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                      "message"=>"You must enter a valid initial date and end date",
+                      "status"=>500)));
+          } else if($initial_date_range > $end_date_range){
+            return $response->withStatus(500)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                      "message"=>"Final date must be greater than initial date",
+                      "status"=>500)));
+          }else if(empty($initial_date_range) || empty($end_date_range)){
+            return $response->withStatus(500)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                      "message"=>"You must enter a valid initial date and end date",
+                      "status"=>500)));
+          }
+
+
+          $sql = "SELECT reports.id AS report_id, reports.name, reports.district_code, reports.zone_code, reports.sector_code, reports.cell_code,reports.cell_id, reports.creation_date, (SELECT CONCAT(user.first_name, ' ', user.last_name) FROM user where user.id = groups_cells.leader) AS leader FROM reports, groups_cells WHERE reports.cell_id = groups_cells.id AND reports.cell_id = $cell_id AND groups_cells.church_id = $final_church AND reports.creation_date BETWEEN '$initial_date_range' AND '$end_date_range' ORDER BY reports.creation_date DESC";
+            
+
+          foreach ($con->query($sql) as $row) {
+            $reports[] = $row;
+          }
+
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $reports));
+
+
+
+        } else{
+
+          $sql2 = "SELECT reports.id AS report_id, reports.name, reports.district_code, reports.zone_code, reports.sector_code, reports.cell_code,reports.cell_id, reports.creation_date, (SELECT CONCAT(user.first_name, ' ', user.last_name) FROM user where user.id = groups_cells.leader) AS leader FROM reports, groups_cells WHERE reports.cell_id = groups_cells.id AND reports.cell_id = $cell_id AND groups_cells.church_id = $final_church ORDER BY reports.creation_date DESC";
+            
+
+          foreach ($con->query($sql2) as $row2) {
+            $reports2[] = $row2;
+          }
+
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $reports2));
+
+        }
+
+        
+      }else{
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "message"=>"Cell does not exist",
+                    "status"=>422)));
+      }
+
+  }
     
   }else{
     return $response->withStatus(422)
@@ -27069,3182 +26793,6 @@ $app->post('/general/list-groups-filters', function ($request,$response) {
 });
 
 
-/*TIMELINE GENERAL*/
-
-$app->post('/general/timeline/list-comments', function ($request,$response) {
-
-  try{
-   $con = $this->db;
-   $owner_id = $request->getParam('owner_id');
-   $role_id = $request->getParam('role_id');
-   $church_id = $request->getParam('church_id');
-   $type = $request->getParam('type');
-   $commented_id = $request->getParam('commented_id');
-
-   if(empty($owner_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "message"=>"Missing parameter: owner_id",
-               "status"=>500)));
-   } else if(empty($role_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "message"=>"Missing parameter: role_id",
-               "status"=>500)));
-   } else if(empty($church_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "message"=>"Missing parameter: church_id",
-               "status"=>500)));
-   } else if(empty($type)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "message"=>"Missing parameter: type",
-               "status"=>500)));
-   } else if(empty($commented_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "message"=>"Missing parameter: commented_id",
-               "status"=>500)));
-   }
-
-
-  $pre_i = $con->prepare("SELECT *
-                           FROM user
-                           WHERE id = :owner_id AND rol = :role_id AND church_id = :church_id AND verified_account = '1'", 
-                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-  $values_i = array(':owner_id' => $owner_id,':role_id' => $role_id, ':church_id' => $church_id);
-  $pre_i->execute($values_i);
-  $result_i = $pre_i->fetch();
-
-  if ($result_i) {
-
-      $final_d = date("Y-m-d H:i:s");
-
-      if ($type == 'user') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM user
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $sql1 = "SELECT timeline_user.id, timeline_user.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_user.created_at FROM timeline_user, user WHERE timeline_user.owner_id = user.id AND user_id = $commented_id ORDER BY timeline_user.created_at DESC";
-          
-
-          foreach ($con->query($sql1) as $row1) {
-            $timeline_comment[] = $row1;
-          }
-
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_comment));
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "message"=>"User that you want to comment does not exist",
-                      "status"=>422)));
-        }
-        
-      } else if ($type == 'member') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM members_cells
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $final_role = $result_fi['role'];
-
-          $sql1 = "SELECT timeline_user.id, timeline_user.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_user.created_at FROM timeline_user, user WHERE timeline_user.owner_id = user.id AND timeline_user.member_id = $commented_id ORDER BY timeline_user.created_at DESC";
-          
-
-          foreach ($con->query($sql1) as $row1) {
-            $timeline_comment[] = $row1;
-          }
-
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_comment));
-
-
-        }else{
-
-          if ($final_role == '1') {
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Guest that you want to comment does not exist",
-                        "status"=>422)));
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Cell Member that you want to comment does not exist",
-                        "status"=>422)));
-
-          }
-          
-        }
-
-        
-      } else if ($type == 'district') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_districts
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $sql1 = "SELECT timeline_group.id, timeline_group.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_group.created_at FROM timeline_group, user WHERE timeline_group.owner_id = user.id AND timeline_group.district_id = $commented_id ORDER BY timeline_group.created_at DESC";
-          
-
-          foreach ($con->query($sql1) as $row1) {
-            $timeline_comment[] = $row1;
-          }
-
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_comment));
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "message"=>"District that you want to comment does not exist",
-                      "status"=>422)));
-        }
-
-
-      }else if ($type == 'zone') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_zones
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $sql1 = "SELECT timeline_group.id, timeline_group.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_group.created_at FROM timeline_group, user WHERE timeline_group.owner_id = user.id AND timeline_group.zone_id = $commented_id ORDER BY timeline_group.created_at DESC";
-          
-
-          foreach ($con->query($sql1) as $row1) {
-            $timeline_comment[] = $row1;
-          }
-
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_comment));
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "message"=>"Zone that you want to comment does not exist",
-                      "status"=>422)));
-        }
-
-      } else if ($type == 'sector') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_sectors
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $sql1 = "SELECT timeline_group.id, timeline_group.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_group.created_at FROM timeline_group, user WHERE timeline_group.owner_id = user.id AND timeline_group.sector_id = $commented_id ORDER BY timeline_group.created_at DESC";
-          
-
-          foreach ($con->query($sql1) as $row1) {
-            $timeline_comment[] = $row1;
-          }
-
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_comment));
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "message"=>"Sector that you want to comment does not exist",
-                      "status"=>422)));
-        }
-
-      }else if ($type == 'cell') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_cells
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $sql1 = "SELECT timeline_group.id, timeline_group.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_group.created_at FROM timeline_group, user WHERE timeline_group.owner_id = user.id AND timeline_group.cell_id = $commented_id ORDER BY timeline_group.created_at DESC";
-          
-
-          foreach ($con->query($sql1) as $row1) {
-            $timeline_comment[] = $row1;
-          }
-
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_comment));
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "message"=>"Cell that you want to comment does not exist",
-                      "status"=>422)));
-        }
-
-      }else{
-
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "message"=>"Parameter type does not exist",
-                    "status"=>422)));
-      }
-
-
-  }else{
-    return $response->withStatus(422)
-            ->withHeader('Content-Type', 'application/json')
-            ->withJson(array('error' => array(
-                "message"=>"User with this role does not exist",
-                "status"=>422)));
-  }
-
-
- }
- catch(\Exception $ex){
-   return $response->withJson(array('error' => array(
-                "message"=> $ex->getMessage(),
-                "status"=>422)),422);
- }
-
-});
-
-
-$app->post('/general/timeline/add-comments', function ($request,$response) {
-
-  try{
-   $con = $this->db;
-   $owner_id = $request->getParam('owner_id');
-   $role_id = $request->getParam('role_id');
-   $church_id = $request->getParam('church_id');
-   $type = $request->getParam('type');
-   $commented_id = $request->getParam('commented_id');
-   $comment = $request->getParam('comment');
-
-   /*Impersonate*/
-   $impersonate = $request->getParam('impersonate');
-   $impersonate_id = $request->getParam('impersonate_id');
-   $impersonate_role = $request->getParam('impersonate_role');
-
-   if(empty($owner_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: owner_id",
-               "status"=>500)));
-   } else if(empty($role_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
-   } else if(empty($church_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
-   } else if(empty($type)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: type",
-               "status"=>500)));
-   } else if(empty($commented_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: commented_id",
-               "status"=>500)));
-   } else if(empty($comment)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: comment",
-               "status"=>500)));
-   }
-
-
-   /*Impersonate*/
-   if ($impersonate) {
-     
-     if ($impersonate != '1') {
-       return $response->withStatus(422)
-               ->withHeader('Content-Type', 'application/json')
-               ->withJson(array('error' => array(
-                 "type"=>"impersonate_not_valid",
-                 "message"=>"Parámetro impersonate no es válido",
-                 "status"=>422)));
-     }else if(empty($impersonate_id)){
-      return $response->withStatus(500)
-              ->withHeader('Content-Type', 'application/json')
-              ->withJson(array('error' => array(
-                "type"=>"required",
-                "message"=>"Parámetro faltante: impersonate_id",
-                "status"=>500)));
-    } else if(empty($impersonate_role)){
-      return $response->withStatus(500)
-              ->withHeader('Content-Type', 'application/json')
-              ->withJson(array('error' => array(
-                "type"=>"required",
-                "message"=>"Parámetro faltante: impersonate_role",
-                "status"=>500)));
-    }
-
-    $pre_imper = $con->prepare("SELECT * FROM user WHERE id = :impersonate_id AND rol = :impersonate_role AND church_id = :church_id AND status = '1' AND verified_account = '1'", 
-                               array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-    $values_imper = array(':impersonate_id' => $impersonate_id,':impersonate_role' => $impersonate_role, ':church_id' => $church_id);
-    $pre_imper->execute($values_imper);
-    $result_imper = $pre_imper->fetch();
-
-    if (empty($result_imper)) {
-
-     return $response->withStatus(422)
-            ->withHeader('Content-Type', 'application/json')
-            ->withJson(array('error' => array(
-                       "type"=>"impersonate_not_exist",
-                       "message"=>"Usuario impersonado con este rol no existe",
-                       "status"=>422)));
-    }
-
-
-    $name_imper = $result_imper['first_name'];
-    $last_name_imper = $result_imper['last_name'];
-
-   }
-
-
-  $pre_i = $con->prepare("SELECT *
-                           FROM user
-                           WHERE id = :owner_id AND rol = :role_id AND church_id = :church_id AND verified_account = '1'", 
-                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-  $values_i = array(':owner_id' => $owner_id,':role_id' => $role_id, ':church_id' => $church_id);
-  $pre_i->execute($values_i);
-  $result_i = $pre_i->fetch();
-
-  if ($result_i) {
-
-      $final_d = date("Y-m-d H:i:s");
-
-      if ($type == 'user') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM user
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $name_commented = $result_fi['first_name'];
-          $last_name_commented = $result_fi['last_name'];
-
-          $role_commented = $result_fi['rol'];
-
-          $sql = "INSERT INTO timeline_user (`comment`, `type_user`,`user_id`,`member_id`,`owner_id`,`created_at`,`updated_at`) VALUES (:comment,:type,:commented_id,NULL,:owner_id,'$final_d','$final_d')";
-          
-          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-          
-          $values = array(
-                 ':comment' => $comment,
-                 ':type' => $type,
-                 ':commented_id' => $commented_id,
-                 ':owner_id' => $owner_id
-                 );
-          
-          $result = $pre->execute($values);
-          $final_id = $con->lastInsertId();
-
-          /*Obtain name of owner comment*/
-          $pre_ow = $con->prepare("SELECT *
-                                   FROM user
-                                   WHERE id = :owner_id AND church_id = :church_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
-          $pre_ow->execute($values_ow);
-          $result_ow = $pre_ow->fetch();
-
-          $first_name = $result_ow['first_name'];
-          $last_name = $result_ow['last_name'];
-
-          /*comments members*/  
-          if ($role_commented == '5') {
-            
-            $pre_mem = $con->prepare("SELECT *
-                                     FROM user_groups
-                                     WHERE user_id = :commented_id", 
-                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_mem = array(':commented_id' => $commented_id);
-            $pre_mem->execute($values_mem);
-            $result_mem = $pre_mem->fetch();
-
-            /*obtain sector*/
-            $sector_mem = $result_mem['sector_id'];
-
-            /*obtain cell*/
-            $cell_mem = $result_mem['cell_id'];
-
-            /*obtain supervisor*/
-            $pre_le = $con->prepare("SELECT *
-                                     FROM groups_sectors
-                                     WHERE id = :sector_mem", 
-                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_le = array(':sector_mem' => $sector_mem);
-            $pre_le->execute($values_le);
-            $result_le = $pre_le->fetch();
-
-            $lead_princi = $result_le['supervisor'];
-
-          } else if ($role_commented == '4') {
-            
-            $pre_mem = $con->prepare("SELECT *
-                                     FROM user_groups
-                                     WHERE user_id = :commented_id", 
-                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_mem = array(':commented_id' => $commented_id);
-            $pre_mem->execute($values_mem);
-            $result_mem = $pre_mem->fetch();
-
-            /*obtain zone*/
-            $zone_mem = $result_mem['zone_id'];
-
-            /*obtain sector*/
-            $sector_mem = $result_mem['sector_id'];
-
-            /*obtain zone_pastor*/
-            $pre_le = $con->prepare("SELECT *
-                                     FROM groups_zones
-                                     WHERE id = :zone_mem", 
-                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_le = array(':zone_mem' => $zone_mem);
-            $pre_le->execute($values_le);
-            $result_le = $pre_le->fetch();
-
-            $lead_princi = $result_le['zone_pastor'];
-
-          } else if ($role_commented == '3') {
-            
-            $pre_mem = $con->prepare("SELECT *
-                                     FROM user_groups
-                                     WHERE user_id = :commented_id", 
-                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_mem = array(':commented_id' => $commented_id);
-            $pre_mem->execute($values_mem);
-            $result_mem = $pre_mem->fetch();
-
-            /*obtain district*/
-            $district_mem = $result_mem['district_id'];
-
-            /*obtain zone*/
-            $zone_mem = $result_mem['zone_id'];
-
-            /*obtain district_pastor*/
-            $pre_le = $con->prepare("SELECT *
-                                     FROM groups_districts
-                                     WHERE id = :district_mem", 
-                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_le = array(':district_mem' => $district_mem);
-            $pre_le->execute($values_le);
-            $result_le = $pre_le->fetch();
-
-            $lead_princi = $result_le['district_pastor'];
-
-          } else if ($role_commented == '2') {
-            
-            $pre_mem = $con->prepare("SELECT *
-                                     FROM user_groups
-                                     WHERE user_id = :commented_id", 
-                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_mem = array(':commented_id' => $commented_id);
-            $pre_mem->execute($values_mem);
-            $result_mem = $pre_mem->fetch();
-
-            /*obtain district*/
-            $district_mem = $result_mem['district_id'];
-
-          }
-
-
-          if($result){
-
-            /*************** ACTIVITIES ***********************/
-
-            if ($impersonate) {
-             
-              $roles = getRole($impersonate_role);
-
-              $role_name = $roles['role_name'];
-              $role_name_es = $roles['role_name_es'];
-
-              $imperson = " (Impersonate)";
-              $imperson_es = " (Impersonado)";
-
-              /*Activity Other member left a comment in their timeline*/
-              $en_message = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in their timeline";
-              $es_message = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en tu timeline";
-
-            } else{
-
-              /*Activity Other member left a comment in their timeline*/
-              $en_message = $first_name . " " . $last_name . " left a comment in their timeline";
-              $es_message = $first_name . " " . $last_name . " dejó un comentario en tu timeline";
-
-            }
-
-            /*Activity Other member left a comment in their timeline*/
-            $pre_act = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message, :en_message,NULL,NULL,NULL,NULL,:id_m,NULL,'1',:final_id,NULL,:final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_act = array(
-                ':es_message' => $es_message, 
-                ':en_message' => $en_message, 
-                ':id_m' => $commented_id,
-                ':final_id' => $final_id,
-                ':final_d' => $final_d);
-
-            $result_act = $pre_act->execute($values_act);
-
-            return $response->withStatus(200)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente', 'id' => $final_id)));
-          }else{
-              return $response->withStatus(422)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('error' => array(
-                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                  "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"user_commented",
-                      "message"=>"El usuario al que quieres comentar no existe",
-                      "status"=>422)));
-        }
-        
-      } else if ($type == 'member') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM members_cells
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        $final_role = $result_fi['role'];
-
-        if ($result_fi) {
-
-          $name_commented = $result_fi['first_name'];
-          $last_name_commented = $result_fi['last_name'];
-          $cell_commented = $result_fi['cell_id'];
-          $role_commented = $result_fi['role'];
-
-          $sql = "INSERT INTO timeline_user (`comment`, `type_user`,`user_id`,`member_id`,`owner_id`,`created_at`,`updated_at`) VALUES (:comment,:type,NULL,:commented_id,:owner_id,'$final_d','$final_d')";
-          
-          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-          
-          $values = array(
-                 ':comment' => $comment,
-                 ':type' => $type,
-                 ':commented_id' => $commented_id,
-                 ':owner_id' => $owner_id
-                 );
-          
-          $result = $pre->execute($values);
-          $final_id = $con->lastInsertId();
-
-          /*Obtain name of owner comment*/
-          $pre_ow = $con->prepare("SELECT *
-                                   FROM user
-                                   WHERE id = :owner_id AND church_id = :church_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
-          $pre_ow->execute($values_ow);
-          $result_ow = $pre_ow->fetch();
-
-          $first_name = $result_ow['first_name'];
-          $last_name = $result_ow['last_name'];
-
-          /*Obtain leader of cell commented (activity)*/
-          $pre_c = $con->prepare("SELECT *
-                                   FROM groups_cells
-                                   WHERE id = :cell_commented AND church_id = :church_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_c = array(':cell_commented' => $cell_commented,':church_id' => $church_id);
-          $pre_c->execute($values_c);
-          $result_c = $pre_c->fetch();
-
-          $principal_leader = $result_c['leader'];
-
-          if($result){
-
-            if ($impersonate) {
-             
-              $roles = getRole($impersonate_role);
-
-              $role_name = $roles['role_name'];
-              $role_name_es = $roles['role_name_es'];
-
-              $imperson = " (Impersonate)";
-              $imperson_es = " (Impersonado)";
-
-              /*Activity Other member left a comment in their timeline (Guest/Cell Member)*/
-              $en_message = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in their timeline";
-              $es_message = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en tu timeline";
-
-            }else{
-
-              /*Activity Other member left a comment in their timeline (Guest/Cell Member)*/
-              $en_message = $first_name . " " . $last_name . " left a comment in their timeline";
-              $es_message = $first_name . " " . $last_name . " dejó un comentario en tu timeline";
-            }
-
-            /*Activity Other member left a comment in their timeline (Guest/Cell Member)*/
-            $pre_act = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message, :en_message,NULL,NULL,NULL,NULL,NULL, :id_m,'1',:final_id,NULL,:final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_act = array(
-                ':es_message' => $es_message,
-                ':en_message' => $en_message, 
-                ':id_m' => $commented_id,
-                ':final_id' => $final_id,
-                ':final_d' => $final_d);
-
-            $result_act = $pre_act->execute($values_act);
-
-            return $response->withStatus(200)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente', 'id' => $final_id)));
-          }else{
-              return $response->withStatus(422)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('error' => array(
-                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                  "status"=>422)));
-          }
-
-
-        }else{
-
-          if ($final_role == '1') {
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"member_commented",
-                        "message"=>"El invitado al que quieres comentar no existe.",
-                        "status"=>422)));
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                      "type"=>"member_commented",
-                      "message"=>"El miembro al que quieres comentar no existe.",
-                      "status"=>422)));
-
-          }
-          
-        }
-
-        
-      } else if ($type == 'district') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_districts
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $final_dis_pastor = $result_fi['district_pastor'];
-
-          $final_dis = $result_fi['district_code'];
-
-          $sql = "INSERT INTO timeline_group (`comment`, `type_group`,`owner_id`,`district_id`,`zone_id`,`sector_id`,`cell_id`,`created_at`,`updated_at`) VALUES (:comment,:type,:owner_id,:commented_id,NULL,NULL,NULL,'$final_d','$final_d')";
-          
-          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-          
-          $values = array(
-            ':comment' => $comment,
-            ':type' => $type,
-            ':commented_id' => $commented_id,
-            ':owner_id' => $owner_id
-          );
-          
-          $result = $pre->execute($values);
-          $final_id = $con->lastInsertId();
-
-
-          /*Obtain name of owner comment*/
-          $pre_ow = $con->prepare("SELECT *
-                                   FROM user
-                                   WHERE id = :owner_id AND church_id = :church_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
-          $pre_ow->execute($values_ow);
-          $result_ow = $pre_ow->fetch();
-
-          $first_name = $result_ow['first_name'];
-          $last_name = $result_ow['last_name'];
-
-
-          if($result){
-
-            if ($impersonate) {
-             
-              $roles = getRole($impersonate_role);
-
-              $role_name = $roles['role_name'];
-              $role_name_es = $roles['role_name_es'];
-
-              $imperson = " (Impersonate)";
-              $imperson_es = " (Impersonado)";
-
-              /*ACTIVITY GROUPS*/
-              /*Activity Other member left a comment in the District (District)*/
-              $en_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in district D" . $final_dis;
-              $es_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en el distrito D" . $final_dis;
-
-            }else{
-
-              /*ACTIVITY GROUPS*/
-              /*Activity Other member left a comment in the District (District)*/
-              $en_message2 = $first_name . " " . $last_name . " left a comment in district D" . $final_dis;
-              $es_message2 = $first_name . " " . $last_name . " dejó un comentario en el distrito D" . $final_dis;
-            }
-
-            /*ACTIVITY GROUPS*/
-
-            /*Activity Other member left a comment in the District (District)*/
-            $pre_act2 = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message2, :en_message2,:commented_id,NULL,NULL,NULL,NULL,NULL,'1',NULL, :final_id, :final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_act2 = array(
-                ':es_message2' => $es_message2, 
-                ':en_message2' => $en_message2, 
-                ':commented_id' => $commented_id,
-                ':final_id' => $final_id,
-                ':final_d' => $final_d);
-
-            $result_act2 = $pre_act2->execute($values_act2);
-
-            return $response->withStatus(200)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente', 'id' => $final_id)));
-          }else{
-              return $response->withStatus(422)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('error' => array(
-                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                  "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"district_commented",
-                      "message"=>"El distrito al que quieres comentar no existe.",
-                      "status"=>422)));
-        }
-
-
-      }else if ($type == 'zone') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_zones
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $final_dis = $result_fi['district_code'];
-          $final_zone = $result_fi['zone_code'];
-
-          $final_zone_pastor = $result_fi['zone_pastor'];
-          $district_f = $result_fi['district_id'];
-
-
-          $sql = "INSERT INTO timeline_group (`comment`, `type_group`,`owner_id`,`district_id`,`zone_id`,`sector_id`,`cell_id`,`created_at`,`updated_at`) VALUES (:comment,:type,:owner_id,NULL,:commented_id,NULL,NULL,'$final_d','$final_d')";
-          
-          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-          
-          $values = array(
-            ':comment' => $comment,
-            ':type' => $type,
-            ':commented_id' => $commented_id,
-            ':owner_id' => $owner_id
-          );
-          
-          $result = $pre->execute($values);
-          $final_id = $con->lastInsertId();
-
-
-          /*Obtain name of owner comment*/
-          $pre_ow = $con->prepare("SELECT *
-                                   FROM user
-                                   WHERE id = :owner_id AND church_id = :church_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
-          $pre_ow->execute($values_ow);
-          $result_ow = $pre_ow->fetch();
-
-          $first_name = $result_ow['first_name'];
-          $last_name = $result_ow['last_name'];
-
-          if($result){
-
-            /*************** ACTIVITIES ***********************/
-            if ($impersonate) {
-             
-              $roles = getRole($impersonate_role);
-
-              $role_name = $roles['role_name'];
-              $role_name_es = $roles['role_name_es'];
-
-              $imperson = " (Impersonate)";
-              $imperson_es = " (Impersonado)";
-
-              /*ACTIVITY GROUPS*/
-
-              /*Activity Other member left a comment in the Zone (Zone)*/
-              $en_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in Zone D" . $final_dis . " Z" . $final_zone;
-              $es_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en la Zona D" . $final_dis . " Z" . $final_zone;
-
-            }else{
-
-              /*ACTIVITY GROUPS*/
-
-              /*Activity Other member left a comment in the Zone (Zone)*/
-              $en_message2 = $first_name . " " . $last_name . " left a comment in Zone D" . $final_dis . " Z" . $final_zone;
-              $es_message2 = $first_name . " " . $last_name . " dejó un comentario en la Zona D" . $final_dis . " Z" . $final_zone;
-            }  
-
-            /*ACTIVITY GROUPS*/
-
-            /*Activity Other member left a comment in the Zone (Zone)*/
-            $pre_act2 = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message2, :en_message2,NULL,:commented_id,NULL,NULL,NULL,NULL,'1',NULL, :final_id, :final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_act2 = array(
-                ':es_message2' => $es_message2, 
-                ':en_message2' => $en_message2, 
-                ':commented_id' => $commented_id,
-                ':final_id' => $final_id,
-                ':final_d' => $final_d);
-
-            $result_act2 = $pre_act2->execute($values_act2);
-
-            return $response->withStatus(200)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente', 'id' => $final_id)));
-          }else{
-              return $response->withStatus(422)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('error' => array(
-                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                  "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"zone_commented",
-                      "message"=>"La zona al que quieres comentar no existe.",
-                      "status"=>422)));
-        }
-
-      } else if ($type == 'sector') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_sectors
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $final_dis = $result_fi['district_code'];
-          $final_zone = $result_fi['zone_code'];
-          $final_sec = $result_fi['sector_code'];
-
-          $final_supervisor = $result_fi['supervisor'];
-          $zone_f = $result_fi['zone_id'];
-
-          $sql = "INSERT INTO timeline_group (`comment`, `type_group`,`owner_id`,`district_id`,`zone_id`,`sector_id`,`cell_id`,`created_at`,`updated_at`) VALUES (:comment,:type,:owner_id,NULL,NULL,:commented_id,NULL,'$final_d','$final_d')";
-          
-          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-          
-          $values = array(
-            ':comment' => $comment,
-            ':type' => $type,
-            ':commented_id' => $commented_id,
-            ':owner_id' => $owner_id
-          );
-          
-          $result = $pre->execute($values);
-          $final_id = $con->lastInsertId();
-
-
-          /*Obtain name of owner comment*/
-          $pre_ow = $con->prepare("SELECT *
-                                   FROM user
-                                   WHERE id = :owner_id AND church_id = :church_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
-          $pre_ow->execute($values_ow);
-          $result_ow = $pre_ow->fetch();
-
-          $first_name = $result_ow['first_name'];
-          $last_name = $result_ow['last_name'];
-
-          if($result){
-
-            /*************** ACTIVITIES ***********************/
-            if ($impersonate) {
-             
-              $roles = getRole($impersonate_role);
-
-              $role_name = $roles['role_name'];
-              $role_name_es = $roles['role_name_es'];
-
-              $imperson = " (Impersonate)";
-              $imperson_es = " (Impersonado)";
-
-              /*ACTIVITY GROUPS*/
-
-              /*Activity Other member left a comment in the Sector (Sector)*/
-              $en_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in Sector D" . $final_dis . " Z" . $final_zone . " S" . $final_sec;
-              $es_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en el sector D" . $final_dis . " Z" . $final_zone . " S" . $final_sec;
-
-            }else{
-
-              /*ACTIVITY GROUPS*/
-
-              /*Activity Other member left a comment in the Sector (Sector)*/
-              $en_message2 = $first_name . " " . $last_name . " left a comment in Sector D" . $final_dis . " Z" . $final_zone . " S" . $final_sec;
-              $es_message2 = $first_name . " " . $last_name . " dejó un comentario en el sector D" . $final_dis . " Z" . $final_zone . " S" . $final_sec;
-            }
-
-            /*ACTIVITY GROUPS*/
-
-            /*Activity Other member left a comment in the Sector (Sector)*/
-            $pre_act2 = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message2, :en_message2,NULL,NULL,:commented_id,NULL,NULL,NULL,'1',NULL, :final_id, :final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_act2 = array(
-                ':es_message2' => $es_message2, 
-                ':en_message2' => $en_message2, 
-                ':commented_id' => $commented_id,
-                ':final_id' => $final_id,
-                ':final_d' => $final_d);
-
-            $result_act2 = $pre_act2->execute($values_act2);
-
-            return $response->withStatus(200)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente', 'id' => $final_id)));
-          }else{
-              return $response->withStatus(422)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('error' => array(
-                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                  "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"sector_commented",
-                      "message"=>"El sector al que quieres comentar no existe.",
-                      "status"=>422)));
-        }
-
-      }else if ($type == 'cell') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_cells
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $final_dis = $result_fi['district_code'];
-          $final_zone = $result_fi['zone_code'];
-          $final_sec = $result_fi['sector_code'];
-          $final_cell = $result_fi['cell_code'];
-
-          $final_leader = $result_fi['leader'];
-          $sector_f = $result_fi['sector_id'];
-
-          $sql = "INSERT INTO timeline_group (`comment`, `type_group`,`owner_id`,`district_id`,`zone_id`,`sector_id`,`cell_id`,`created_at`,`updated_at`) VALUES (:comment,:type,:owner_id,NULL,NULL,NULL,:commented_id,'$final_d','$final_d')";
-          
-          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-          
-          $values = array(
-            ':comment' => $comment,
-            ':type' => $type,
-            ':commented_id' => $commented_id,
-            ':owner_id' => $owner_id
-          );
-          
-          $result = $pre->execute($values);
-          $final_id = $con->lastInsertId();
-
-          /*Obtain name of owner comment*/
-          $pre_ow = $con->prepare("SELECT *
-                                   FROM user
-                                   WHERE id = :owner_id AND church_id = :church_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
-          $pre_ow->execute($values_ow);
-          $result_ow = $pre_ow->fetch();
-
-          $first_name = $result_ow['first_name'];
-          $last_name = $result_ow['last_name'];
-
-          if($result){
-
-            /*************** ACTIVITIES ***********************/
-            if ($impersonate) {
-             
-              $roles = getRole($impersonate_role);
-
-              $role_name = $roles['role_name'];
-              $role_name_es = $roles['role_name_es'];
-
-              $imperson = " (Impersonate)";
-              $imperson_es = " (Impersonado)";
-
-              /*ACTIVITY GROUPS*/
-
-              /*Activity Other member left a comment in the Cell Group (Cell Group)*/
-              $en_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in Cell Group D" . $final_dis . " Z" . $final_zone . " S" . $final_sec . " C" . $final_cell;
-              $es_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en la célula D" . $final_dis . " Z" . $final_zone . " S" . $final_sec . " C" . $final_cell;
-
-            }else{
-
-              /*ACTIVITY GROUPS*/
-
-              /*Activity Other member left a comment in the Cell Group (Cell Group)*/
-              $en_message2 = $first_name . " " . $last_name . " left a comment in Cell Group D" . $final_dis . " Z" . $final_zone . " S" . $final_sec . " C" . $final_cell;
-              $es_message2 = $first_name . " " . $last_name . " dejó un comentario en la célula D" . $final_dis . " Z" . $final_zone . " S" . $final_sec . " C" . $final_cell;
-            }
-
-            /*ACTIVITY GROUPS*/
-
-            /*Activity Other member left a comment in the Cell Group (Cell Group)*/
-            $pre_act2 = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message2, :en_message2,NULL,NULL,NULL,:commented_id,NULL,NULL,'1',NULL, :final_id, :final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values_act2 = array(
-                ':es_message2' => $es_message2, 
-                ':en_message2' => $en_message2, 
-                ':commented_id' => $commented_id,
-                ':final_id' => $final_id,
-                ':final_d' => $final_d);
-
-            $result_act2 = $pre_act2->execute($values_act2);
-
-            return $response->withStatus(200)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente.', 'id' => $final_id)));
-          }else{
-              return $response->withStatus(422)
-                              ->withHeader('Content-Type', 'application/json')
-                              ->withJson(array('error' => array(
-                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                  "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"cell_commented",
-                      "message"=>"La célula que quieres comentar no existe.",
-                      "status"=>422)));
-        }
-
-      }else{
-
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "type"=>"type_doesnt_exist",
-                    "message"=>"El tipo de parámetro no existe",
-                    "status"=>422)));
-      }
-
-
-  }else{
-    return $response->withStatus(422)
-            ->withHeader('Content-Type', 'application/json')
-            ->withJson(array('error' => array(
-                "type"=>"user_doesnt_exist",
-                "message"=>"El usuario no existe.",
-                "status"=>422)));
-  }
-
-
- }
- catch(\Exception $ex){
-   return $response->withJson(array('error' => array(
-                "message"=> $ex->getMessage(),
-                "status"=>422)),422);
- }
-
-});
-
-
-$app->post('/general/timeline/edit-comments', function ($request,$response) {
-
-  try{
-   $con = $this->db;
-   $owner_id = $request->getParam('owner_id');
-   $role_id = $request->getParam('role_id');
-   $church_id = $request->getParam('church_id');
-   $type = $request->getParam('type');
-   $commented_id = $request->getParam('commented_id');
-   $comment = $request->getParam('comment');
-   $comment_id = $request->getParam('comment_id');
-
-   if(empty($owner_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: owner_id",
-               "status"=>500)));
-   } else if(empty($role_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
-   } else if(empty($church_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
-   } else if(empty($type)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: type",
-               "status"=>500)));
-   } else if(empty($commented_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: commented_id",
-               "status"=>500)));
-   } else if(empty($comment)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: comment",
-               "status"=>500)));
-   } else if(empty($comment_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: comment_id",
-               "status"=>500)));
-   }
-
-
-  $pre_i = $con->prepare("SELECT *
-                           FROM user
-                           WHERE id = :owner_id AND rol = :role_id AND church_id = :church_id AND verified_account = '1'", 
-                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-  $values_i = array(':owner_id' => $owner_id,':role_id' => $role_id, ':church_id' => $church_id);
-  $pre_i->execute($values_i);
-  $result_i = $pre_i->fetch();
-
-  if ($result_i) {
-
-      $final_d = date("Y-m-d H:i:s");
-
-      if ($type == 'user') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM user
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_user
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND user_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("UPDATE timeline_user SET comment = :comment,
-                                   type_user = :type,
-                                   user_id = :commented_id,
-                                   owner_id = :owner_id,
-                                   updated_at = :updated_at
-                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment' => $comment,
-              ':type' => $type,
-              ':commented_id' => $commented_id,
-              ':owner_id' => $owner_id,
-              ':comment_id' => $comment_id,
-              ':updated_at' => $final_d
-              );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Comentario editado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"user_commented",
-                      "message"=>"El usuario no existe",
-                      "status"=>422)));
-        }
-        
-      } else if ($type == 'member') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM members_cells
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_user
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND member_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("UPDATE timeline_user SET comment = :comment,
-                                   type_user = :type,
-                                   member_id = :commented_id,
-                                   owner_id = :owner_id,
-                                   updated_at = :updated_at
-                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment' => $comment,
-              ':type' => $type,
-              ':commented_id' => $commented_id,
-              ':owner_id' => $owner_id,
-              ':comment_id' => $comment_id,
-              ':updated_at' => $final_d
-              );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Comentario editado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-
-          if ($final_role == '1') {
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"member_commented",
-                        "message"=>"El invitado no existe.",
-                        "status"=>422)));
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"member_commented",
-                        "message"=>"El miembro no existe.",
-                        "status"=>422)));
-
-          }
-          
-        }
-
-        
-      } else if ($type == 'district') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_districts
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_group
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND district_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("UPDATE timeline_group SET comment = :comment,
-                                   type_group = :type,
-                                   district_id = :commented_id,
-                                   owner_id = :owner_id,
-                                   updated_at = :updated_at
-                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment' => $comment,
-              ':type' => $type,
-              ':commented_id' => $commented_id,
-              ':owner_id' => $owner_id,
-              ':comment_id' => $comment_id,
-              ':updated_at' => $final_d
-              );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Comentario editado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"district_commented",
-                      "message"=>"El distrito no existe.",
-                      "status"=>422)));
-        }
-
-
-      }else if ($type == 'zone') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_zones
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_group
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND zone_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("UPDATE timeline_group SET comment = :comment,
-                                   type_group = :type,
-                                   zone_id = :commented_id,
-                                   owner_id = :owner_id,
-                                   updated_at = :updated_at
-                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment' => $comment,
-              ':type' => $type,
-              ':commented_id' => $commented_id,
-              ':owner_id' => $owner_id,
-              ':comment_id' => $comment_id,
-              ':updated_at' => $final_d
-              );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Comentario editado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"zone_commented",
-                      "message"=>"La zona no existe.",
-                      "status"=>422)));
-        }
-
-      } else if ($type == 'sector') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_sectors
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_group
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND sector_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("UPDATE timeline_group SET comment = :comment,
-                                   type_group = :type,
-                                   sector_id = :commented_id,
-                                   owner_id = :owner_id,
-                                   updated_at = :updated_at
-                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment' => $comment,
-              ':type' => $type,
-              ':commented_id' => $commented_id,
-              ':owner_id' => $owner_id,
-              ':comment_id' => $comment_id,
-              ':updated_at' => $final_d
-              );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Commentario editado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"sector_commented",
-                      "message"=>"El sector no existe.",
-                      "status"=>422)));
-        }
-
-      }else if ($type == 'cell') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_cells
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_group
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND cell_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("UPDATE timeline_group SET comment = :comment,
-                                   type_group = :type,
-                                   cell_id = :commented_id,
-                                   owner_id = :owner_id,
-                                   updated_at = :updated_at
-                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment' => $comment,
-              ':type' => $type,
-              ':commented_id' => $commented_id,
-              ':owner_id' => $owner_id,
-              ':comment_id' => $comment_id,
-              ':updated_at' => $final_d
-              );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Commentario editado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"cell_commented",
-                      "message"=>"La célula no existe.",
-                      "status"=>422)));
-        }
-
-      }else{
-
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "type"=>"type_doesnt_exist",
-                    "message"=>"El tipo de parámetro no existe",
-                    "status"=>422)));
-      }
-
-
-  }else{
-    return $response->withStatus(422)
-            ->withHeader('Content-Type', 'application/json')
-            ->withJson(array('error' => array(
-                "type"=>"user_doesnt_exist",
-                "message"=>"El usuario no existe.",
-                "status"=>422)));
-  }
-
-
- }
- catch(\Exception $ex){
-   return $response->withJson(array('error' => array(
-                "message"=> $ex->getMessage(),
-                "status"=>422)),422);
- }
-
-});
-
-
-$app->post('/general/timeline/delete-comments', function ($request,$response) {
-
-  try{
-   $con = $this->db;
-   $owner_id = $request->getParam('owner_id');
-   $role_id = $request->getParam('role_id');
-   $church_id = $request->getParam('church_id');
-   $type = $request->getParam('type');
-   $commented_id = $request->getParam('commented_id');
-   $comment_id = $request->getParam('comment_id');
-
-   if(empty($owner_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: owner_id",
-               "status"=>500)));
-   } else if(empty($role_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
-   } else if(empty($church_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
-   } else if(empty($type)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: type",
-               "status"=>500)));
-   } else if(empty($commented_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: commented_id",
-               "status"=>500)));
-   } else if(empty($comment_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: comment_id",
-               "status"=>500)));
-   }
-
-
-  $pre_i = $con->prepare("SELECT *
-                           FROM user
-                           WHERE id = :owner_id AND rol = :role_id AND church_id = :church_id AND verified_account = '1'", 
-                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-  $values_i = array(':owner_id' => $owner_id,':role_id' => $role_id, ':church_id' => $church_id);
-  $pre_i->execute($values_i);
-  $result_i = $pre_i->fetch();
-
-  if ($result_i) {
-
-      $final_d = date("Y-m-d H:i:s");
-
-      if ($type == 'user') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM user
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_user
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND user_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("DELETE FROM timeline_user WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment_id' => $comment_id
-            );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Comentario eliminado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"user_commented",
-                      "message"=>"El usuario comentado no existe",
-                      "status"=>422)));
-        }
-        
-      } else if ($type == 'member') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM members_cells
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_user
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND member_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("DELETE FROM timeline_user WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment_id' => $comment_id
-            );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Comentario eliminado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "type"=>"member_commented",
-                                    "message"=>"El miembro al que quieres comentar no existe.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-
-          if ($final_role == '1') {
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"member_commented",
-                        "message"=>"El invitado comentado no existe.",
-                        "status"=>422)));
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"member_commented",
-                        "message"=>"El miembro comentado no existe.",
-                        "status"=>422)));
-
-          }
-          
-        }
-
-        
-      } else if ($type == 'district') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_districts
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_group
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND district_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("DELETE FROM timeline_group WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment_id' => $comment_id
-            );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Comentario eliminado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"district_commented",
-                      "message"=>"El distrito comentado no existe.",
-                      "status"=>422)));
-        }
-
-
-      }else if ($type == 'zone') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_zones
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_group
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND zone_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("DELETE FROM timeline_group WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment_id' => $comment_id
-            );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Comentario eliminado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"zone_commented",
-                      "message"=>"La zona comentada no existe.",
-                      "status"=>422)));
-        }
-
-      } else if ($type == 'sector') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_sectors
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_group
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND sector_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("DELETE FROM timeline_group WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment_id' => $comment_id
-            );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Comentario eliminado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"sector_commented",
-                      "message"=>"El sector comentado no existe.",
-                      "status"=>422)));
-        }
-
-      }else if ($type == 'cell') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_cells
-                                 WHERE id = :commented_id AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $pre_ve = $con->prepare("SELECT *
-                                   FROM timeline_group
-                                   WHERE id = :comment_id AND owner_id = :owner_id AND cell_id = :commented_id", 
-                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
-          $pre_ve->execute($values_ve);
-          $result_ve = $pre_ve->fetch();
-
-          if ($result_ve) {
-
-            $pre = $con->prepare("DELETE FROM timeline_group WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-            $values = array(
-              ':comment_id' => $comment_id
-            );
-
-            $result = $pre->execute($values);
-
-
-            if($result){
-              return $response->withStatus(200)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('response' => 'Commentario eliminado exitosamente'));
-            }else{
-                return $response->withStatus(422)
-                                ->withHeader('Content-Type', 'application/json')
-                                ->withJson(array('error' => array(
-                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
-                                    "status"=>422)));
-            }
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"comment_doesnt_exist",
-                        "message"=>"El comentario no existe",
-                        "status"=>422)));
-          }
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"cell_commented",
-                      "message"=>"La célula comentada no existe.",
-                      "status"=>422)));
-        }
-
-      }else{
-
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "type"=>"type_doesnt_exist",
-                    "message"=>"El tipo de parámetro no existe",
-                    "status"=>422)));
-      }
-
-
-  }else{
-    return $response->withStatus(422)
-            ->withHeader('Content-Type', 'application/json')
-            ->withJson(array('error' => array(
-                "type"=>"user_doesnt_exist",
-                "message"=>"El usuario no existe.",
-                "status"=>422)));
-  }
-
-
- }
- catch(\Exception $ex){
-   return $response->withJson(array('error' => array(
-                "message"=> $ex->getMessage(),
-                "status"=>422)),422);
- }
-
-});
-
-
-$app->post('/general/timeline/list-timeline', function ($request,$response) {
-
-  try{
-   $con = $this->db;
-   $user_id = $request->getParam('user_id');
-   $role_id = $request->getParam('role_id');
-   $church_id = $request->getParam('church_id');
-   $type = $request->getParam('type');
-   $id_timeline_owner = $request->getParam('id_timeline_owner');
-   $language = $request->getParam('language');
-   $start_date = $request->getParam('start_date');
-   $end_date = $request->getParam('end_date');
-   $keywords = $request->getParam('keywords');
-
-   if(empty($user_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
-   } else if(empty($role_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
-   } else if(empty($church_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
-   } else if(empty($type)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: type",
-               "status"=>500)));
-   } else if(empty($id_timeline_owner)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: id_timeline_owner",
-               "status"=>500)));
-   } else if(empty($language)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Parámetro faltante: language",
-               "status"=>500)));
-   }
-
-
-  $valid_initial_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$start_date);
-  $valid_end_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$end_date);
-
-
-  $pre_i = $con->prepare("SELECT *
-                           FROM user
-                           WHERE id = :user_id AND rol = :role_id AND church_id = :church_id AND verified_account = '1'", 
-                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-  $values_i = array(':user_id' => $user_id,':role_id' => $role_id, ':church_id' => $church_id);
-  $pre_i->execute($values_i);
-  $result_i = $pre_i->fetch();
-
-  if ($result_i) {
-
-      $final_d = date("Y-m-d H:i:s");
-
-      /*TYPE USER*/
-      if ($type == 'user') {
-
-        /*verified user exits*/
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM user
-                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-        	
-        	$date_filter=null;
-
-        	/*if exist date filter*/
-        	if ($start_date && $end_date) {
-
-        	  if (!$valid_initial_date || !$valid_end_date) {
-        	    return $response->withStatus(500)
-        	            ->withHeader('Content-Type', 'application/json')
-        	            ->withJson(array('error' => array(
-        	              "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
-        	              "status"=>500)));
-        	  } else if($start_date > $end_date){
-        	    return $response->withStatus(500)
-        	            ->withHeader('Content-Type', 'application/json')
-        	            ->withJson(array('error' => array(
-        	              "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
-        	              "status"=>500)));
-        	  }
-
-        	  $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
-        	}
-
-        	/*verified language*/
-        	if ($language == 'en') {
-        	  /*sql of complete activity en*/
-        	  $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE user_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-        	}else if ($language == 'es'){
-        	  /*sql of complete activity es*/
-        	  $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE user_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-        	}else{
-        	  return $response->withStatus(422)
-        	          ->withHeader('Content-Type', 'application/json')
-        	          ->withJson(array('error' => array(
-        	              "message"=>"Tipo de lenguaje inválido",
-        	              "status"=>422)));
-        	}
-
-        	foreach ($con->query($sql_en) as $row1) {
-
-        	  $activity_line = $row1;
-
-        	  if ($row1['is_comment'] == '1') {
-
-        	    /*sql for comment*/
-        	    $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_user.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_user.owner_id = user.id) as full_name, (SELECT id from user where timeline_user.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_user.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_user.id = :comment_id";
-
-              if ($row1['id_comment_user_timeline'] == null){
-
-                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_user.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_user.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
-
-              }
-
-        	    $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        	    $values_gro = array(
-        	      ':comment_id' => $row1['id_comment_user_timeline'] != null ?$row1['id_comment_user_timeline']:$row1['id_comment_group_timeline']
-        	    );
-        	    
-        	    $result_gro = $pre_gro->execute($values_gro);
-        	    $result_gro = $pre_gro->fetch();
-
-        	    /*add info owner comment*/
-              $activity_line['owner_id'] = $result_gro['owner_id'];
-        	    $activity_line['comment'] = $result_gro['comment'];
-        	    $activity_line['full_name'] = $result_gro['full_name'];
-              $activity_line['profile_picture'] = $result_gro['profile_picture'];
-              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
-        	    $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
-
-        	  }
-
-        	  /*final array*/
-        	  $timeline_ac[] = $activity_line;
-        	}
-
-        	/*if exist keywords filter*/
-        	if ($keywords) {
-
-        	  $timeline_filter = [];
-        	  /*regex keywords*/
-        	  $regex  = "/". $keywords. "/";
-
-        	  foreach ($timeline_ac as $item) {
-        	    /*preg_match for comment or msg*/
-        	    if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
-        	    {
-        	      $timeline_filter[] = $item;
-        	    }
-        	  }
-
-        	  if (count($timeline_filter) == 0) {
-        	    $timeline_ac = null;
-        	  }else{
-        	    $timeline_ac = $timeline_filter;
-        	  }
-
-        	}
-        	
-        	return $response->withStatus(200)
-        	                  ->withHeader('Content-Type', 'application/json')
-        	                  ->withJson(array('response' => $timeline_ac));
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"user_timeline_owner",
-                      "message"=>"El usuario no existe.",
-                      "status"=>422)));
-        }
-        
-        /*TYPE MEMBER*/
-      } else if ($type == 'member') {
-
-        /*verified member exits*/
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM members_cells
-                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-
-        if ($result_fi) {
-
-          $date_filter=null;
-
-          /*if exist date filter*/
-          if ($start_date && $end_date) {
-
-            if (!$valid_initial_date || !$valid_end_date) {
-              return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
-                        "status"=>500)));
-            } else if($start_date > $end_date){
-              return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
-                        "status"=>500)));
-            }
-
-            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
-          }
-
-          /*verified language*/
-          if ($language == 'en') {
-            /*sql of complete activity en*/
-            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE member_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-          }else if ($language == 'es'){
-            /*sql of complete activity es*/
-            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE member_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Tipo de lenguaje inválido",
-                        "status"=>422)));
-          }
-
-          foreach ($con->query($sql_en) as $row1) {
-
-            $activity_line = $row1;
-
-            if ($row1['is_comment'] == '1') {
-
-              /*sql for comment*/
-              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_user.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_user.owner_id = user.id) as full_name, (SELECT id from user where timeline_user.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_user.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_user.id = :comment_id";
-
-              if ($row1['id_comment_user_timeline'] == null){
-
-                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_user.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_user.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
-
-              }
-
-              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-              $values_gro = array(
-                ':comment_id' => $row1['id_comment_user_timeline'] != null ?$row1['id_comment_user_timeline']:$row1['id_comment_group_timeline']
-              );
-              
-              $result_gro = $pre_gro->execute($values_gro);
-              $result_gro = $pre_gro->fetch();
-
-              /*add info owner comment*/
-              $activity_line['owner_id'] = $result_gro['owner_id'];
-              $activity_line['comment'] = $result_gro['comment'];
-              $activity_line['full_name'] = $result_gro['full_name'];
-              $activity_line['profile_picture'] = $result_gro['profile_picture'];
-              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
-              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
-
-            }
-
-            /*final array*/
-            $timeline_ac[] = $activity_line;
-          }
-
-          /*if exist keywords filter*/
-          if ($keywords) {
-
-            $timeline_filter = [];
-            /*regex keywords*/
-            $regex  = "/". $keywords. "/";
-
-            foreach ($timeline_ac as $item) {
-              /*preg_match for comment or msg*/
-              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
-              {
-                $timeline_filter[] = $item;
-              }
-            }
-
-            if (count($timeline_filter) == 0) {
-              $timeline_ac = null;
-            }else{
-              $timeline_ac = $timeline_filter;
-            }
-
-          }
-          
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_ac));
-
-
-        }else{
-
-          return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"member_timeline_owner",
-                        "message"=>"El miembro no existe.",
-                        "status"=>422)));          
-        }
-
-        
-      } else if ($type == 'district') {
-
-        /*verified district exits*/
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_districts
-                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $date_filter=null;
-
-          /*if exist date filter*/
-          if ($start_date && $end_date) {
-
-            if (!$valid_initial_date || !$valid_end_date) {
-              return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
-                        "status"=>500)));
-            } else if($start_date > $end_date){
-              return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
-                        "status"=>500)));
-            }
-
-            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
-          }
-
-          /*verified language*/
-          if ($language == 'en') {
-            /*sql of complete activity en*/
-            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE district_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-          }else if ($language == 'es'){
-            /*sql of complete activity es*/
-            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE district_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Tipo de lenguaje inválido",
-                        "status"=>422)));
-          }
-
-          foreach ($con->query($sql_en) as $row1) {
-
-            $activity_line = $row1;
-
-            if ($row1['is_comment'] == '1') {
-
-              /*sql for comment*/
-              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
-
-              if ($row1['id_comment_group_timeline'] == null){
-
-                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_group.id = :comment_id";
-
-              }
-
-              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-              $values_gro = array(
-                ':comment_id' => $row1['id_comment_group_timeline'] != null ?$row1['id_comment_group_timeline']:$row1['id_comment_user_timeline']
-              );
-              
-              $result_gro = $pre_gro->execute($values_gro);
-              $result_gro = $pre_gro->fetch();
-
-              /*add info owner comment*/
-              $activity_line['owner_id'] = $result_gro['owner_id'];
-              $activity_line['comment'] = $result_gro['comment'];
-              $activity_line['full_name'] = $result_gro['full_name'];
-              $activity_line['profile_picture'] = $result_gro['profile_picture'];
-              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
-              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
-
-            }
-
-            /*final array*/
-            $timeline_ac[] = $activity_line;
-          }
-
-          /*if exist keywords filter*/
-          if ($keywords) {
-
-            $timeline_filter = [];
-            /*regex keywords*/
-            $regex  = "/". $keywords. "/";
-
-            foreach ($timeline_ac as $item) {
-              /*preg_match for comment or msg*/
-              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
-              {
-                $timeline_filter[] = $item;
-              }
-            }
-
-            if (count($timeline_filter) == 0) {
-              $timeline_ac = null;
-            }else{
-              $timeline_ac = $timeline_filter;
-            }
-
-          }
-          
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_ac));
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"district_timeline_owner",
-                      "message"=>"El distrito no existe.",
-                      "status"=>422)));
-        }
-
-
-      }else if ($type == 'zone') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_zones
-                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $date_filter=null;
-
-          /*if exist date filter*/
-          if ($start_date && $end_date) {
-
-            if (!$valid_initial_date || !$valid_end_date) {
-              return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
-                        "status"=>500)));
-            } else if($start_date > $end_date){
-              return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
-                        "status"=>500)));
-            }
-
-            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
-          }
-
-          /*verified language*/
-          if ($language == 'en') {
-            /*sql of complete activity en*/
-            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE zone_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-          }else if ($language == 'es'){
-            /*sql of complete activity es*/
-            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE zone_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Tipo de lenguaje inválido",
-                        "status"=>422)));
-          }
-
-          foreach ($con->query($sql_en) as $row1) {
-
-            $activity_line = $row1;
-
-            if ($row1['is_comment'] == '1') {
-
-              /*sql for comment*/
-              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
-
-
-              if ($row1['id_comment_group_timeline'] == null){
-
-                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_group.id = :comment_id";
-
-              }
-
-              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-              $values_gro = array(
-                ':comment_id' => $row1['id_comment_group_timeline'] != null ?$row1['id_comment_group_timeline']:$row1['id_comment_user_timeline']
-              );
-              
-              $result_gro = $pre_gro->execute($values_gro);
-              $result_gro = $pre_gro->fetch();
-
-              /*add info owner comment*/
-              $activity_line['owner_id'] = $result_gro['owner_id'];
-              $activity_line['comment'] = $result_gro['comment'];
-              $activity_line['full_name'] = $result_gro['full_name'];
-              $activity_line['profile_picture'] = $result_gro['profile_picture'];
-              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
-              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
-
-            }
-
-            /*final array*/
-            $timeline_ac[] = $activity_line;
-          }
-
-          /*if exist keywords filter*/
-          if ($keywords) {
-
-            $timeline_filter = [];
-            /*regex keywords*/
-            $regex  = "/". $keywords. "/";
-
-            foreach ($timeline_ac as $item) {
-              /*preg_match for comment or msg*/
-              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
-              {
-                $timeline_filter[] = $item;
-              }
-            }
-
-            if (count($timeline_filter) == 0) {
-              $timeline_ac = null;
-            }else{
-              $timeline_ac = $timeline_filter;
-            }
-
-          }
-          
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_ac));
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"zone_timeline_owner",
-                      "message"=>"La zona no existe.",
-                      "status"=>422)));
-        }
-
-      } else if ($type == 'sector') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_sectors
-                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $date_filter=null;
-
-          /*if exist date filter*/
-          if ($start_date && $end_date) {
-
-            if (!$valid_initial_date || !$valid_end_date) {
-              return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
-                        "status"=>500)));
-            } else if($start_date > $end_date){
-              return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
-                        "status"=>500)));
-            }
-
-            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
-          }
-
-          /*verified language*/
-          if ($language == 'en') {
-            /*sql of complete activity en*/
-            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE sector_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-          }else if ($language == 'es'){
-            /*sql of complete activity es*/
-            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE sector_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Tipo de lenguaje inválido",
-                        "status"=>422)));
-          }
-
-          foreach ($con->query($sql_en) as $row1) {
-
-            $activity_line = $row1;
-
-            if ($row1['is_comment'] == '1') {
-
-              /*sql for comment*/
-              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
-
-              if ($row1['id_comment_group_timeline'] == null){
-
-                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_group.id = :comment_id";
-
-              }
-
-              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-              $values_gro = array(
-                ':comment_id' => $row1['id_comment_group_timeline'] != null ?$row1['id_comment_group_timeline']:$row1['id_comment_user_timeline']
-              );
-              
-              $result_gro = $pre_gro->execute($values_gro);
-              $result_gro = $pre_gro->fetch();
-
-              /*add info owner comment*/
-              $activity_line['owner_id'] = $result_gro['owner_id'];
-              $activity_line['comment'] = $result_gro['comment'];
-              $activity_line['full_name'] = $result_gro['full_name'];
-              $activity_line['profile_picture'] = $result_gro['profile_picture'];
-              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
-              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
-
-            }
-
-            /*final array*/
-            $timeline_ac[] = $activity_line;
-          }
-
-          /*if exist keywords filter*/
-          if ($keywords) {
-
-            $timeline_filter = [];
-            /*regex keywords*/
-            $regex  = "/". $keywords. "/";
-
-            foreach ($timeline_ac as $item) {
-              /*preg_match for comment or msg*/
-              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
-              {
-                $timeline_filter[] = $item;
-              }
-            }
-
-            if (count($timeline_filter) == 0) {
-              $timeline_ac = null;
-            }else{
-              $timeline_ac = $timeline_filter;
-            }
-
-          }
-          
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_ac));
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"sector_timeline_owner",
-                      "message"=>"El sector no existe.",
-                      "status"=>422)));
-        }
-
-      }else if ($type == 'cell') {
-
-        $pre_fi = $con->prepare("SELECT *
-                                 FROM groups_cells
-                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
-                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
-        $pre_fi->execute($values_fi);
-        $result_fi = $pre_fi->fetch();
-
-        if ($result_fi) {
-
-          $date_filter=null;
-
-          /*if exist date filter*/
-          if ($start_date && $end_date) {
-
-            if (!$valid_initial_date || !$valid_end_date) {
-              return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
-                        "status"=>500)));
-            } else if($start_date > $end_date){
-              return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                      ->withJson(array('error' => array(
-                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
-                        "status"=>500)));
-            }
-
-            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
-          }
-
-          /*verified language*/
-          if ($language == 'en') {
-            /*sql of complete activity en*/
-            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE cell_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-          }else if ($language == 'es'){
-            /*sql of complete activity es*/
-            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE cell_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
-
-          }else{
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Tipo de lenguaje inválido",
-                        "status"=>422)));
-          }
-
-          foreach ($con->query($sql_en) as $row1) {
-
-            $activity_line = $row1;
-
-            if ($row1['is_comment'] == '1') {
-
-              /*sql for comment*/
-              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
-
-              if ($row1['id_comment_group_timeline'] == null){
-
-                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_group.id = :comment_id";
-
-              }
-
-              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-              $values_gro = array(
-                ':comment_id' => $row1['id_comment_group_timeline'] != null ?$row1['id_comment_group_timeline']:$row1['id_comment_user_timeline']
-              );
-              
-              $result_gro = $pre_gro->execute($values_gro);
-              $result_gro = $pre_gro->fetch();
-
-              /*add info owner comment*/
-              $activity_line['owner_id'] = $result_gro['owner_id'];
-              $activity_line['comment'] = $result_gro['comment'];
-              $activity_line['full_name'] = $result_gro['full_name'];
-              $activity_line['profile_picture'] = $result_gro['profile_picture'];
-              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
-              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
-            }
-
-            /*final array*/
-            $timeline_ac[] = $activity_line;
-          }
-
-          /*if exist keywords filter*/
-          if ($keywords) {
-
-            $timeline_filter = [];
-            /*regex keywords*/
-            $regex  = "/". $keywords. "/";
-
-            foreach ($timeline_ac as $item) {
-              /*preg_match for comment or msg*/
-              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
-              {
-                $timeline_filter[] = $item;
-              }
-            }
-
-            if (count($timeline_filter) == 0) {
-              $timeline_ac = null;
-            }else{
-              $timeline_ac = $timeline_filter;
-            }
-
-          }
-          
-          return $response->withStatus(200)
-                            ->withHeader('Content-Type', 'application/json')
-                            ->withJson(array('response' => $timeline_ac));
-
-
-        }else{
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"cell_timeline_owner",
-                      "message"=>"La célula no existe.",
-                      "status"=>422)));
-        }
-
-      }else{
-
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "type"=>"type_doesnt_exist",
-                    "message"=>"El tipo de parámetro no existe",
-                    "status"=>422)));
-      }
-
-
-  }else{
-    return $response->withStatus(422)
-            ->withHeader('Content-Type', 'application/json')
-            ->withJson(array('error' => array(
-                "type"=>"user_doesnt_exist",
-                "message"=>"El usuario no existe.",
-                "status"=>422)));
-  }
-
-
- }
- catch(\Exception $ex){
-   return $response->withJson(array('error' => array(
-                "message"=> $ex->getMessage(),
-                "status"=>422)),422);
- }
-
-});
-
-
-
 /************ REPORTS ******************/
 
 $app->post('/cells/report-members', function ($request,$response) {
@@ -30661,8 +27209,8 @@ $app->post('/cells/create-reports', function ($request,$response) {
       /*verified user*/
       if ($result_s) {
 
-      	$first_name_leader = $result_s['first_name'];
-      	$last_name_leader = $result_s['last_name'];
+        $first_name_leader = $result_s['first_name'];
+        $last_name_leader = $result_s['last_name'];
 
         $pre_cell = $con->prepare("SELECT *
                                  FROM groups_cells
@@ -33818,9 +30366,9 @@ $app->post('/cells/create-reports', function ($request,$response) {
 
                 }else{
 
-                	/*Activity Added a new report (Leader)*/
-                	$en_message = $first_name_leader . " " . $last_name_leader . " added a new report " . $report_name;
-                	$es_message = $first_name_leader . " " . $last_name_leader . " agregó un nuevo reporte " . $report_name;
+                  /*Activity Added a new report (Leader)*/
+                  $en_message = $first_name_leader . " " . $last_name_leader . " added a new report " . $report_name;
+                  $es_message = $first_name_leader . " " . $last_name_leader . " agregó un nuevo reporte " . $report_name;
 
                   /*Activity The leader added a new report (Cell Group)*/
                   $en_message2 = $first_name_leader . " " . $last_name_leader . " added a new report " . $report_name;
@@ -34325,8 +30873,8 @@ $app->post('/cells/edit-report', function ($request,$response) {
 
       if ($result_s) {
 
-      	$first_name_leader = $result_s['first_name'];
-      	$last_name_leader = $result_s['last_name'];
+        $first_name_leader = $result_s['first_name'];
+        $last_name_leader = $result_s['last_name'];
 
         $pre_r = $con->prepare("SELECT *
                                  FROM reports
@@ -39680,8 +36228,8 @@ $app->post('/members/remove', function ($request,$response) {
 
       if ($result_le) {
 
-      	  $first_name = $result_le['first_name'];
-      	  $last_name = $result_le['last_name'];
+          $first_name = $result_le['first_name'];
+          $last_name = $result_le['last_name'];
 
           /*is_complete user*/
           $pre_dpastor = $con->prepare("UPDATE user SET is_complete = '0' WHERE id = :leader_id AND church_id = :church_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
@@ -39722,7 +36270,7 @@ $app->post('/members/remove', function ($request,$response) {
 
           if($result_dpastor){
 
-          	  $date_u = date("Y-m-d H:i:s");
+              $date_u = date("Y-m-d H:i:s");
 
               /*************** ACTIVITIES ***********************/
 
@@ -39759,9 +36307,9 @@ $app->post('/members/remove', function ($request,$response) {
 
               }else{
 
-            	  /*Activity Removed from a cell group (Leader)*/
-            	  $en_message = $first_name_user . " " . $last_name_user . " removed " . $first_name . " " . $last_name . " from cell group D" . $final_d . " Z" . $final_z . " S" . $final_s . " C" . $final_c;
-            	  $es_message = $first_name_user . " " . $last_name_user . " removió a " . $first_name . " " . $last_name . " de la célula D" . $final_d . " Z" . $final_z . " S" . $final_s . " C" . $final_c;
+                /*Activity Removed from a cell group (Leader)*/
+                $en_message = $first_name_user . " " . $last_name_user . " removed " . $first_name . " " . $last_name . " from cell group D" . $final_d . " Z" . $final_z . " S" . $final_s . " C" . $final_c;
+                $es_message = $first_name_user . " " . $last_name_user . " removió a " . $first_name . " " . $last_name . " de la célula D" . $final_d . " Z" . $final_z . " S" . $final_s . " C" . $final_c;
 
                 /*ACTIVITY GROUPS*/
 
@@ -41342,7 +37890,7 @@ $app->post('/statistics/global', function ($request,$response) {
 
       }else if ($initial_date && $is_mobile) {
         $period_filter = "AND (created_at BETWEEN '$initial_quarter' AND '$final_quarter')";
-      	$period_fil_s = "AND (user.created_at BETWEEN '$initial_quarter' AND '$final_quarter')";
+        $period_fil_s = "AND (user.created_at BETWEEN '$initial_quarter' AND '$final_quarter')";
       }
 
 
@@ -41414,36 +37962,36 @@ $app->post('/statistics/global', function ($request,$response) {
 
        // if date filter is sent
       if ($initial_date && $final_date && empty($is_mobile)) {
-      	/*count the days between two dates*/
-	 	    $date1 = date_create($initial_date);
-	  	  $date2 = date_create($final_date);
+        /*count the days between two dates*/
+        $date1 = date_create($initial_date);
+        $date2 = date_create($final_date);
 
-  	  	//difference between two dates
-  	  	$diff = date_diff($date1,$date2)->format("%a");
+        //difference between two dates
+        $diff = date_diff($date1,$date2)->format("%a");
 
-	  	  $sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
-    	 	$period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
-    	 	$sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
-    	 	$period_f = $sub_p . " 23:59:59";
+        $sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
+        $period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
+        $sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
+        $period_f = $sub_p . " 23:59:59";
 
         $period_filter2 = "AND (created_at BETWEEN '$period_i' AND '$period_f')";
         $period_fil_s2 = "AND (user.created_at BETWEEN '$period_i' AND '$period_f')";
         
       }else if ($initial_date && $is_mobile) {
-      	/*count the days between two dates*/
-	 	    $date1 = date_create($initial_date);
-	  	  $date2 = date_create($sub_m);
+        /*count the days between two dates*/
+        $date1 = date_create($initial_date);
+        $date2 = date_create($sub_m);
 
-  	  	//difference between two dates
-  	  	$diff = date_diff($date1,$date2)->format("%a");
+        //difference between two dates
+        $diff = date_diff($date1,$date2)->format("%a");
 
-	  	  $sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
-    	 	$period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
-    	 	$sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
-    	 	$period_f = $sub_p . " 23:59:59";
+        $sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
+        $period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
+        $sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
+        $period_f = $sub_p . " 23:59:59";
 
         $period_filter2 = "AND (created_at BETWEEN '$period_i' AND '$period_f')";
-      	$period_fil_s2 = "AND (user.created_at BETWEEN '$period_i' AND '$period_f')";
+        $period_fil_s2 = "AND (user.created_at BETWEEN '$period_i' AND '$period_f')";
       }
       
       $pre_last = $con->prepare("SELECT count(id) as total_lead FROM user WHERE status = 1 AND rol = '5' $period_filter2 AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
@@ -41459,7 +38007,7 @@ $app->post('/statistics/global', function ($request,$response) {
       $total_last = $result_last['total_lead'];
 
       if ($total_ac == 0 && $total_last == 0) {
-      	$percentage_c = 0;
+        $percentage_c = 0;
       }else if ($total_last == 0) {
         // $percentage_c = ($total_ac - $total_last) * 100;
         $percentage_c = 100;
@@ -41649,7 +38197,7 @@ $app->post('/statistics/global', function ($request,$response) {
         $period_filter3 = "AND (created_at BETWEEN '$period_i' AND '$period_f')";
         
       }else if ($initial_date && $is_mobile) {
-      	$period_filter3 = "AND (created_at BETWEEN '$period_i' AND '$period_f')";
+        $period_filter3 = "AND (created_at BETWEEN '$period_i' AND '$period_f')";
       }
 
       $pre_per = $con->prepare("SELECT count(id) as members
@@ -41685,7 +38233,7 @@ $app->post('/statistics/global', function ($request,$response) {
       $total_per2 = $result_per2['guests'];
 
       if ($total_guest == 0 && $total_per2 == 0) {
-      	$percentage_guest = 0;
+        $percentage_guest = 0;
       }else if ($total_per2 == 0) {
         // $percentage_guest = ($total_guest - $total_per2) * 100;
         $percentage_guest = 100;
@@ -41736,12 +38284,12 @@ $app->post('/statistics/global', function ($request,$response) {
        // if date filter is sent
       if ($initial_date && $final_date && empty($is_mobile)) {
 
-      	$start_date = new DateTime($initial_date);
-      	$end_date = new DateTime($final_date);
+        $start_date = new DateTime($initial_date);
+        $end_date = new DateTime($final_date);
         
       }else if ($initial_date && $is_mobile) {
-      	$start_date = new DateTime($initial_date);
-      	$end_date = new DateTime($sub_m);
+        $start_date = new DateTime($initial_date);
+        $end_date = new DateTime($sub_m);
       }
 
       /*initial for (days)*/
@@ -42131,7 +38679,7 @@ $app->post('/statistics/global', function ($request,$response) {
         $period_filter4 = "AND (members_cells.created_at BETWEEN '$period_i' AND '$period_f')";
         
       }else if ($initial_date && $is_mobile) {
-      	$period_filter4 = "AND (members_cells.created_at BETWEEN '$period_i' AND '$period_f')";
+        $period_filter4 = "AND (members_cells.created_at BETWEEN '$period_i' AND '$period_f')";
       }
 
       $sql2 = "SELECT count(members_cells.id) as crowd, groups_cells.city, groups_cells.leader, (SELECT user.profile_picture FROM user WHERE user.id = groups_cells.leader) as profile_picture FROM members_cells, groups_cells WHERE groups_cells.id = members_cells.cell_id AND groups_cells.active = 1 AND members_cells.active = 1 $period_filter4 AND groups_cells.church_id = '$church_id' AND members_cells.church_id = '$church_id' $filter_graph_top group by groups_cells.city order by count(members_cells.id) DESC LIMIT 5";
@@ -42157,21 +38705,21 @@ $app->post('/statistics/global', function ($request,$response) {
         
         array_multisort($aux2, SORT_DESC, $result_cities2);
 
-      	for($i=0; $i<count($result_cities); $i++){
-      	    for($j=0; $j<count($result_cities2); $j++){
-      	        if($result_cities[$i]['city'] == $result_cities2[$j]['city']){
+        for($i=0; $i<count($result_cities); $i++){
+            for($j=0; $j<count($result_cities2); $j++){
+                if($result_cities[$i]['city'] == $result_cities2[$j]['city']){
 
-      	            if ($result_cities[$i]['crowd'] >= $result_cities2[$j]['crowd']) {
-      	              $ranking = '1';
-      	              $result_cities[$i]['ranking'] = '1';
-      	            }else{
-      	              $ranking = '0';
-      	              $result_cities[$i]['ranking'] = '0';
-      	            }
+                    if ($result_cities[$i]['crowd'] >= $result_cities2[$j]['crowd']) {
+                      $ranking = '1';
+                      $result_cities[$i]['ranking'] = '1';
+                    }else{
+                      $ranking = '0';
+                      $result_cities[$i]['ranking'] = '0';
+                    }
 
-      	        }
-      	    }
-      	}
+                }
+            }
+        }
 
       } else if($result_cities != null){
 
@@ -42546,10 +39094,10 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
         $final_quarter = $final_date . " 23:59:59";
 
       }else if ($initial_date && $is_mobile) {
-      	$initial_quarter = $initial_date . " 00:00:00";
-      	$add_m = date('Y-m-d', strtotime("+3 month", strtotime($initial_date)));
-      	$sub_m = date('Y-m-d', strtotime("-1 day", strtotime($add_m)));
-      	$final_quarter = $sub_m . " 23:59:59";
+        $initial_quarter = $initial_date . " 00:00:00";
+        $add_m = date('Y-m-d', strtotime("+3 month", strtotime($initial_date)));
+        $sub_m = date('Y-m-d', strtotime("-1 day", strtotime($add_m)));
+        $final_quarter = $sub_m . " 23:59:59";
       }
 
 
@@ -42796,7 +39344,7 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
       $crowd = $result_cro['crowd'];
 
       if ($crowd == null) {
-      	$crowd = '0';
+        $crowd = '0';
       }
 
       /*Obtain member attendance*/
@@ -42809,7 +39357,7 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
       $total_mem = $result_mem['member_attendance'];
 
       if ($total_mem == null) {
-      	$total_mem = '0';
+        $total_mem = '0';
       }
 
       /*Obtain guests attendance*/
@@ -42822,7 +39370,7 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
       $total_gu = $result_gu['guest_attendance'];
 
       if ($total_gu == null) {
-      	$total_gu = '0';
+        $total_gu = '0';
       }
 
        /*Obtain kids attendance*/
@@ -42835,7 +39383,7 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
       $total_k = $result_k['kids_attendance'];
 
       if ($total_k == null) {
-      	$total_k = '0';
+        $total_k = '0';
       }
 
       /****** Cell Members vs Guests ******/
@@ -42849,36 +39397,36 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
       $sub_i = '';
       $sub_p = '';
       if ($initial_date && $final_date && empty($is_mobile)) {
-      	/*count the days between two dates*/
-	 	    $date1 = date_create($initial_date);
-	  	  $date2 = date_create($final_date);
+        /*count the days between two dates*/
+        $date1 = date_create($initial_date);
+        $date2 = date_create($final_date);
 
-  	  	//difference between two dates
-  	  	$diff = date_diff($date1,$date2)->format("%a");
+        //difference between two dates
+        $diff = date_diff($date1,$date2)->format("%a");
 
-  	  	$sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
-      	$period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
-      	$sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
-      	$period_f = $sub_p . " 23:59:59";
+        $sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
+        $period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
+        $sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
+        $period_f = $sub_p . " 23:59:59";
 
-      	$initial_quarter2 = $period_i;
-      	$final_quarter2 = $period_f;
+        $initial_quarter2 = $period_i;
+        $final_quarter2 = $period_f;
         
       }else if ($initial_date && $is_mobile) {
-      	/*count the days between two dates*/
-	 	    $date1 = date_create($initial_date);
-	  	  $date2 = date_create($sub_m);
+        /*count the days between two dates*/
+        $date1 = date_create($initial_date);
+        $date2 = date_create($sub_m);
 
-  	  	//difference between two dates
-  	  	$diff = date_diff($date1,$date2)->format("%a");
+        //difference between two dates
+        $diff = date_diff($date1,$date2)->format("%a");
 
-  	  	$sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
-      	$period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
-      	$sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
-      	$period_f = $sub_p . " 23:59:59";
+        $sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
+        $period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
+        $sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
+        $period_f = $sub_p . " 23:59:59";
 
-      	$initial_quarter2 = $period_i;
-      	$final_quarter2 = $period_f;
+        $initial_quarter2 = $period_i;
+        $final_quarter2 = $period_f;
       }
 
       $pre_per = $con->prepare("SELECT SUM(total_member_assistance) as member_attendance FROM reports,groups_cells WHERE reports.cell_id = groups_cells.id AND groups_cells.church_id = :church_id AND (reports.created_at BETWEEN '$initial_quarter2' AND '$final_quarter2') $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
@@ -42932,12 +39480,12 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
        // if date filter is sent
       if ($initial_date && $final_date && empty($is_mobile)) {
 
-      	$start_date = new DateTime($initial_date);
-      	$end_date = new DateTime($final_date);
+        $start_date = new DateTime($initial_date);
+        $end_date = new DateTime($final_date);
         
       }else if ($initial_date && $is_mobile) {
-      	$start_date = new DateTime($initial_date);
-      	$end_date = new DateTime($sub_m);
+        $start_date = new DateTime($initial_date);
+        $end_date = new DateTime($sub_m);
       }
 
       /*initial for (days)*/
@@ -42957,7 +39505,7 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
         $total_first = $result_first['member_attendance'];
 
         if ($total_first == null) {
-        	$total_first = '0';
+          $total_first = '0';
         }
 
         $members_f[] = $total_first;
@@ -42966,7 +39514,7 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
         $total_sec = $result_first['guests_attendance'];
 
         if ($total_sec == null) {
-        	$total_sec = '0';
+          $total_sec = '0';
         }
 
         $guest_f[] = $total_sec;
@@ -42982,7 +39530,7 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
         $total_all = $result_all['kids_attendance'];
 
         if ($total_all == null) {
-        	$total_all = '0';
+          $total_all = '0';
         }
 
         $cells_f[] = $total_all;
@@ -43052,43 +39600,43 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
       $total_to = $result_today['kids_attendance'];
 
       if ($total_to == null) {
-      	$total_to = '0';
+        $total_to = '0';
       }
 
       /********** Age ranges **********/
 
       // general ages
       $pre_age = $con->prepare("SELECT count(reports_details.id) as age1, (SELECT count(reports_details.id) as age2 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
-      	  (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
-      	  (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
-      	  (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
-      	  (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
+          (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
+          (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
+          (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
+          (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
           FROM reports, groups_cells, reports_details, members_cells 
           WHERE reports.cell_id = groups_cells.id  AND reports.id = reports_details.report_id 
           AND reports_details.member_id = members_cells.id  AND groups_cells.church_id = :church_id 
           AND members_cells.active = 1  AND reports_details.cell_group = '1' 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
       $values_age = array(':church_id' => $church_id);
       $pre_age->execute($values_age);
@@ -43103,36 +39651,36 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
 
       // general female ages
       $pre_agef = $con->prepare("SELECT count(reports_details.id) as age1, (SELECT count(reports_details.id) as age2 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'f'
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
-      	  (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
-      	  (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
-      	  (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
-      	  (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'f'
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
+          (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
+          (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
+          (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
+          (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
           FROM reports, groups_cells, reports_details, members_cells 
           WHERE reports.cell_id = groups_cells.id  AND reports.id = reports_details.report_id 
           AND reports_details.member_id = members_cells.id  AND groups_cells.church_id = :church_id 
           AND members_cells.active = 1 AND members_cells.gender = 'f' AND reports_details.cell_group = '1' 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
       $values_agef = array(':church_id' => $church_id);
       $pre_agef->execute($values_agef);
@@ -43147,36 +39695,36 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
 
       // general male ages
       $pre_agem = $con->prepare("SELECT count(reports_details.id) as age1, (SELECT count(reports_details.id) as age2 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'm'
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
-      	  (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
-      	  (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
-      	  (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
-      	  (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'm'
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
+          (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
+          (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
+          (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
+          (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
           FROM reports, groups_cells, reports_details, members_cells 
           WHERE reports.cell_id = groups_cells.id  AND reports.id = reports_details.report_id 
           AND reports_details.member_id = members_cells.id  AND groups_cells.church_id = :church_id 
           AND members_cells.active = 1 AND members_cells.gender = 'm' AND reports_details.cell_group = '1' 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
       $values_agem = array(':church_id' => $church_id);
       $pre_agem->execute($values_agem);
@@ -43192,36 +39740,36 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
 
       // cell_member ages
       $pre_agec = $con->prepare("SELECT count(reports_details.id) as age1, (SELECT count(reports_details.id) as age2 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
-      	  (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
-      	  (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
-      	  (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
-      	  (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
+          (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
+          (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
+          (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
+          (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
           FROM reports, groups_cells, reports_details, members_cells 
           WHERE reports.cell_id = groups_cells.id  AND reports.id = reports_details.report_id 
           AND reports_details.member_id = members_cells.id  AND groups_cells.church_id = :church_id 
           AND members_cells.active = 1 AND members_cells.role != 1 AND reports_details.cell_group = '1' 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
       $values_agec = array(':church_id' => $church_id);
       $pre_agec->execute($values_agec);
@@ -43236,36 +39784,36 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
 
       // cell_member female ages
       $pre_age_memberf = $con->prepare("SELECT count(reports_details.id) as age1, (SELECT count(reports_details.id) as age2 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f'
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
-      	  (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
-      	  (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
-      	  (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
-      	  (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f'
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
+          (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
+          (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
+          (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
+          (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
           FROM reports, groups_cells, reports_details, members_cells 
           WHERE reports.cell_id = groups_cells.id  AND reports.id = reports_details.report_id 
           AND reports_details.member_id = members_cells.id  AND groups_cells.church_id = :church_id 
           AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'f' AND reports_details.cell_group = '1' 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
       $values_memberf = array(':church_id' => $church_id);
       $pre_age_memberf->execute($values_memberf);
@@ -43280,36 +39828,36 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
 
       // cell_member male ages
       $pre_age_memberm = $con->prepare("SELECT count(reports_details.id) as age1, (SELECT count(reports_details.id) as age2 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm'
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
-      	  (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
-      	  (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
-      	  (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
-      	  (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm'
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
+          (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
+          (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
+          (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
+          (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
           FROM reports, groups_cells, reports_details, members_cells 
           WHERE reports.cell_id = groups_cells.id  AND reports.id = reports_details.report_id 
           AND reports_details.member_id = members_cells.id  AND groups_cells.church_id = :church_id 
           AND members_cells.active = 1 AND members_cells.role != 1 AND members_cells.gender = 'm' AND reports_details.cell_group = '1' 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
       $values_memberm = array(':church_id' => $church_id);
       $pre_age_memberm->execute($values_memberm);
@@ -43324,36 +39872,36 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
 
       // guests ages
       $pre_ageg = $con->prepare("SELECT count(reports_details.id) as age1, (SELECT count(reports_details.id) as age2 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
-      	  (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
-      	  (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
-      	  (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
-      	  (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
+          (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
+          (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
+          (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
+          (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
           FROM reports, groups_cells, reports_details, members_cells 
           WHERE reports.cell_id = groups_cells.id  AND reports.id = reports_details.report_id 
           AND reports_details.member_id = members_cells.id  AND groups_cells.church_id = :church_id 
           AND members_cells.active = 1 AND members_cells.role = 1 AND reports_details.cell_group = '1' 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
       $values_ageg = array(':church_id' => $church_id);
       $pre_ageg->execute($values_ageg);
@@ -43368,36 +39916,36 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
 
       // guests female ages
       $pre_age_guestf = $con->prepare("SELECT count(reports_details.id) as age1, (SELECT count(reports_details.id) as age2 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f'
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
-      	  (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
-      	  (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
-      	  (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
-      	  (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f'
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
+          (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
+          (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
+          (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
+          (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
           FROM reports, groups_cells, reports_details, members_cells 
           WHERE reports.cell_id = groups_cells.id  AND reports.id = reports_details.report_id 
           AND reports_details.member_id = members_cells.id  AND groups_cells.church_id = :church_id 
           AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'f' AND reports_details.cell_group = '1' 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
       $values_guestf = array(':church_id' => $church_id);
       $pre_age_guestf->execute($values_guestf);
@@ -43412,36 +39960,36 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
 
       // guests male ages
       $pre_age_guestm = $con->prepare("SELECT count(reports_details.id) as age1, (SELECT count(reports_details.id) as age2 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm'
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
-      	  (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
-      	  (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
-      	  (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
-      	  (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
-      	  AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
-      	  AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm' 
-      	  AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm'
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
+          (SELECT count(reports_details.id) as age3 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
+          (SELECT count(reports_details.id) as age4 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
+          (SELECT count(reports_details.id) as age5 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
+          (SELECT count(reports_details.id) as age6 FROM reports, groups_cells, reports_details, members_cells WHERE reports.cell_id = groups_cells.id 
+          AND reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id 
+          AND groups_cells.church_id = :church_id AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm' 
+          AND reports_details.cell_group = '1' AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
           FROM reports, groups_cells, reports_details, members_cells 
           WHERE reports.cell_id = groups_cells.id  AND reports.id = reports_details.report_id 
           AND reports_details.member_id = members_cells.id  AND groups_cells.church_id = :church_id 
           AND members_cells.active = 1 AND members_cells.role = 1 AND members_cells.gender = 'm' AND reports_details.cell_group = '1' 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 11 $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
       $values_guestm = array(':church_id' => $church_id);
       $pre_age_guestm->execute($values_guestm);
@@ -43476,7 +40024,7 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
         $period_filter4 = "AND (reports_details.created_at BETWEEN '$period_i' AND '$period_f')";
         
       }else if ($initial_date && $is_mobile) {
-      	$period_filter4 = "AND (reports_details.created_at BETWEEN '$period_i' AND '$period_f')";
+        $period_filter4 = "AND (reports_details.created_at BETWEEN '$period_i' AND '$period_f')";
       }
 
       $sql2 = "SELECT count(reports_details.id) as crowd, groups_cells.city, groups_cells.leader, (SELECT user.profile_picture FROM user WHERE user.id = groups_cells.leader) as profile_picture FROM reports, groups_cells, reports_details, members_cells WHERE reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id AND groups_cells.id = members_cells.cell_id AND groups_cells.church_id = '$church_id' AND members_cells.active = 1 AND reports_details.cell_group = '1' $period_filter4 $filter_crowd group by groups_cells.city order by count(reports_details.id) DESC LIMIT 5";
@@ -43500,23 +40048,23 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
         }
         array_multisort($aux2, SORT_DESC, $result_cities2);
 
-	      for($i=0; $i<count($result_cities); $i++){
-	          for($j=0; $j<count($result_cities2); $j++){
-	              if($result_cities[$i]['city'] == $result_cities2[$j]['city']){
+        for($i=0; $i<count($result_cities); $i++){
+            for($j=0; $j<count($result_cities2); $j++){
+                if($result_cities[$i]['city'] == $result_cities2[$j]['city']){
 
-	                  if ($result_cities[$i]['crowd'] >= $result_cities2[$j]['crowd']) {
-	                    $ranking = '1';
-	                    $result_cities[$i]['ranking'] = '1';
-	                  }else{
-	                    $ranking = '0';
-	                    $result_cities[$i]['ranking'] = '0';
-	                  }
+                    if ($result_cities[$i]['crowd'] >= $result_cities2[$j]['crowd']) {
+                      $ranking = '1';
+                      $result_cities[$i]['ranking'] = '1';
+                    }else{
+                      $ranking = '0';
+                      $result_cities[$i]['ranking'] = '0';
+                    }
 
-	              }
-	          }
-	      }
+                }
+            }
+        }
 
-	   } else if($result_cities != null){
+     } else if($result_cities != null){
 
         // order array top cities actual
         foreach ($result_cities as $key => $frow) {
@@ -43591,7 +40139,7 @@ $app->post('/statistics/cell-attendance', function ($request,$response) {
       /**** OBTAIN PERCENTAGE FINAL (OVERALL GROWTH) *****/
       if ($overall_attend == 0 && $overall_attend2 == 0) {
         $percentage_overall = 0;
-	  } else if ($overall_attend2 == 0) {
+    } else if ($overall_attend2 == 0) {
         $percentage_overall = 100;
       } else{
         $percentage_overall = ($overall_attend - $overall_attend2) * 100 / $overall_attend2;
@@ -43843,10 +40391,10 @@ $app->post('/statistics/church-attendance', function ($request,$response) {
         $final_quarter = $final_date . " 23:59:59";
 
       }else if ($initial_date && $is_mobile) {
-      	$initial_quarter = $initial_date . " 00:00:00";
-      	$add_m = date('Y-m-d', strtotime("+3 month", strtotime($initial_date)));
-      	$sub_m = date('Y-m-d', strtotime("-1 day", strtotime($add_m)));
-      	$final_quarter = $sub_m . " 23:59:59";
+        $initial_quarter = $initial_date . " 00:00:00";
+        $add_m = date('Y-m-d', strtotime("+3 month", strtotime($initial_date)));
+        $sub_m = date('Y-m-d', strtotime("-1 day", strtotime($add_m)));
+        $final_quarter = $sub_m . " 23:59:59";
       }
 
       /*validate parent_id*/
@@ -44147,35 +40695,35 @@ $app->post('/statistics/church-attendance', function ($request,$response) {
 
       if ($initial_date && $final_date && empty($is_mobile)) {
        /*count the days between two dates*/
-	 	   $date1 = date_create($initial_date);
-	  	 $date2 = date_create($final_date);
+       $date1 = date_create($initial_date);
+       $date2 = date_create($final_date);
 
-	  	 //difference between two dates
-	  	 $diff = date_diff($date1,$date2)->format("%a");
+       //difference between two dates
+       $diff = date_diff($date1,$date2)->format("%a");
 
-	  	 $sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
-	 	   $period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
-	 	   $sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
-	 	   $period_f = $sub_p . " 23:59:59";
+       $sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
+       $period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
+       $sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
+       $period_f = $sub_p . " 23:59:59";
 
-  	 	 $initial_quarter2 = $period_i;
-  	 	 $final_quarter2 = $period_f;
+       $initial_quarter2 = $period_i;
+       $final_quarter2 = $period_f;
         
       }else if ($initial_date && $is_mobile) {
-      	/*count the days between two dates*/
-  	 	  $date1 = date_create($initial_date);
-  	  	$date2 = date_create($sub_m);
+        /*count the days between two dates*/
+        $date1 = date_create($initial_date);
+        $date2 = date_create($sub_m);
 
-  	  	//difference between two dates
-  	  	$diff = date_diff($date1,$date2)->format("%a");
+        //difference between two dates
+        $diff = date_diff($date1,$date2)->format("%a");
 
-  	  	$sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
-    	 	$period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
-    	 	$sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
-    	 	$period_f = $sub_p . " 23:59:59";
+        $sub_i = date('Y-m-d', strtotime($initial_date. " - " . $diff . " days"));
+        $period_i = date('Y-m-d H:i:s', strtotime($initial_date. " - " . $diff . " days"));
+        $sub_p = date('Y-m-d', strtotime($initial_date. " - 1 days"));
+        $period_f = $sub_p . " 23:59:59";
 
-      	$initial_quarter2 = $period_i;
-      	$final_quarter2 = $period_f;
+        $initial_quarter2 = $period_i;
+        $final_quarter2 = $period_f;
       }
 
       $pre_per = $con->prepare("SELECT count(reports_details.id) as member_att FROM reports,groups_cells,reports_details, members_cells WHERE reports.id = reports_details.report_id AND reports.cell_id = groups_cells.id AND reports_details.member_id = members_cells.id AND groups_cells.church_id = :church_id AND members_cells.role != 1 AND (reports_details.created_at BETWEEN '$initial_quarter2' AND '$final_quarter2') AND (reports_details.doctrine = 1 OR reports_details.celebration = 1) $filter_crowd", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
@@ -44229,12 +40777,12 @@ $app->post('/statistics/church-attendance', function ($request,$response) {
        // if date filter is sent
       if ($initial_date && $final_date && empty($is_mobile)) {
 
-      	$start_date = new DateTime($initial_date);
-      	$end_date = new DateTime($final_date);
+        $start_date = new DateTime($initial_date);
+        $end_date = new DateTime($final_date);
         
       }else if ($initial_date && $is_mobile) {
-      	$start_date = new DateTime($initial_date);
-      	$end_date = new DateTime($sub_m);
+        $start_date = new DateTime($initial_date);
+        $end_date = new DateTime($sub_m);
       }
 
       /*initial for (days)*/
@@ -44254,7 +40802,7 @@ $app->post('/statistics/church-attendance', function ($request,$response) {
         $total_first = $result_first['member_att'];
 
         if ($total_first == null) {
-        	$total_first = '0';
+          $total_first = '0';
         }
 
         $members_f[] = $total_first;
@@ -44263,7 +40811,7 @@ $app->post('/statistics/church-attendance', function ($request,$response) {
         $total_sec = $result_first['guests_att'];
 
         if ($total_sec == null) {
-        	$total_sec = '0';
+          $total_sec = '0';
         }
 
         $guest_f[] = $total_sec;
@@ -44279,7 +40827,7 @@ $app->post('/statistics/church-attendance', function ($request,$response) {
         $total_all = $result_all['kids_att'];
 
         if ($total_all == null) {
-        	$total_all = '0';
+          $total_all = '0';
         }
 
         $cells_f[] = $total_all;
@@ -44355,7 +40903,7 @@ $app->post('/statistics/church-attendance', function ($request,$response) {
       $total_to = $result_today['kids_att'];
 
       if ($total_to == null) {
-      	$total_to = '0';
+        $total_to = '0';
       }
 
       /********** Age ranges **********/
@@ -44367,35 +40915,35 @@ $app->post('/statistics/church-attendance', function ($request,$response) {
           AND groups_cells.church_id = :church_id AND members_cells.active = 1 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
           AND (reports_details.doctrine = 1 OR reports_details.celebration = 1) 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
-      	  (SELECT count(reports_details.id) as age3 FROM reports,groups_cells,reports_details, members_cells 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 12 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 17) $filter_crowd) as age2, 
+          (SELECT count(reports_details.id) as age3 FROM reports,groups_cells,reports_details, members_cells 
           WHERE reports.id = reports_details.report_id 
           AND reports.cell_id = groups_cells.id AND reports_details.member_id = members_cells.id 
           AND groups_cells.church_id = :church_id AND members_cells.active = 1 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
           AND (reports_details.doctrine = 1 OR reports_details.celebration = 1) 
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
-      	  (SELECT count(reports_details.id) as age4 FROM reports,groups_cells,reports_details, members_cells 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 18 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 24) $filter_crowd) as age3, 
+          (SELECT count(reports_details.id) as age4 FROM reports,groups_cells,reports_details, members_cells 
           WHERE reports.id = reports_details.report_id 
           AND reports.cell_id = groups_cells.id AND reports_details.member_id = members_cells.id 
           AND groups_cells.church_id = :church_id AND members_cells.active = 1 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
           AND (reports_details.doctrine = 1 OR reports_details.celebration = 1)
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
-      	  (SELECT count(reports_details.id) as age5 FROM reports,groups_cells,reports_details, members_cells 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 25 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 34) $filter_crowd) as age4, 
+          (SELECT count(reports_details.id) as age5 FROM reports,groups_cells,reports_details, members_cells 
           WHERE reports.id = reports_details.report_id 
           AND reports.cell_id = groups_cells.id AND reports_details.member_id = members_cells.id 
           AND groups_cells.church_id = :church_id AND members_cells.active = 1 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
           AND (reports_details.doctrine = 1 OR reports_details.celebration = 1)
-      	  AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
-      	  (SELECT count(reports_details.id) as age6 FROM reports,groups_cells,reports_details, members_cells 
+          AND ((YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 35 AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) <= 54) $filter_crowd) as age5, 
+          (SELECT count(reports_details.id) as age6 FROM reports,groups_cells,reports_details, members_cells 
           WHERE reports.id = reports_details.report_id 
           AND reports.cell_id = groups_cells.id AND reports_details.member_id = members_cells.id 
           AND groups_cells.church_id = :church_id AND members_cells.active = 1 
           AND (reports_details.created_at BETWEEN '$initial_quarter' AND '$final_quarter') 
           AND (reports_details.doctrine = 1 OR reports_details.celebration = 1)
-      	  AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
+          AND (YEAR(CURDATE())-YEAR(members_cells.birth_date)) >= 55 $filter_crowd) as age6
           FROM reports,groups_cells,reports_details, members_cells 
           WHERE reports.id = reports_details.report_id 
           AND reports.cell_id = groups_cells.id AND reports_details.member_id = members_cells.id 
@@ -44869,7 +41417,7 @@ $app->post('/statistics/church-attendance', function ($request,$response) {
         $period_filter4 = "AND (reports_details.created_at BETWEEN '$period_i' AND '$period_f')";
         
       }else if ($initial_date && $is_mobile) {
-      	$period_filter4 = "AND (reports_details.created_at BETWEEN '$period_i' AND '$period_f')";
+        $period_filter4 = "AND (reports_details.created_at BETWEEN '$period_i' AND '$period_f')";
       }
 
       $sql2 = "SELECT count(reports_details.id) as crowd, groups_cells.city, groups_cells.leader, (SELECT user.profile_picture FROM user WHERE user.id = groups_cells.leader) as profile_picture FROM reports, groups_cells, reports_details, members_cells WHERE reports.id = reports_details.report_id AND reports_details.member_id = members_cells.id AND groups_cells.id = members_cells.cell_id AND groups_cells.church_id = '$church_id' AND members_cells.active = 1 AND (reports_details.doctrine = 1 OR reports_details.celebration = 1) $period_filter4 $filter_crowd group by groups_cells.city order by count(reports_details.id) DESC LIMIT 5";
@@ -44893,23 +41441,23 @@ $app->post('/statistics/church-attendance', function ($request,$response) {
         }
         array_multisort($aux2, SORT_DESC, $result_cities2);
 
-	      for($i=0; $i<count($result_cities); $i++){
-	          for($j=0; $j<count($result_cities2); $j++){
-	              if($result_cities[$i]['city'] == $result_cities2[$j]['city']){
+        for($i=0; $i<count($result_cities); $i++){
+            for($j=0; $j<count($result_cities2); $j++){
+                if($result_cities[$i]['city'] == $result_cities2[$j]['city']){
 
-	                  if ($result_cities[$i]['crowd'] >= $result_cities2[$j]['crowd']) {
-	                    $ranking = '1';
-	                    $result_cities[$i]['ranking'] = '1';
-	                  }else{
-	                    $ranking = '0';
-	                    $result_cities[$i]['ranking'] = '0';
-	                  }
+                    if ($result_cities[$i]['crowd'] >= $result_cities2[$j]['crowd']) {
+                      $ranking = '1';
+                      $result_cities[$i]['ranking'] = '1';
+                    }else{
+                      $ranking = '0';
+                      $result_cities[$i]['ranking'] = '0';
+                    }
 
-	              }
-	          }
-	      }
+                }
+            }
+        }
 
-	   } else if($result_cities != null){
+     } else if($result_cities != null){
 
         // order array top cities actual
         foreach ($result_cities as $key => $frow) {
@@ -47134,7 +43682,7 @@ $app->post('/statistics/donations', function ($request,$response) {
       $donations_past = $result_cro_ov['donations'];
 
       if ($donations_past == null) {
-      	$donations_past = '0';
+        $donations_past = '0';
       }
 
 
@@ -47514,224 +44062,224 @@ $app->post('/statistics/global/ranking', function ($request,$response) {
 
 
         $sql_leader = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, user.profile_picture, groups_cells.district_code, groups_cells.zone_code, groups_cells.sector_code, groups_cells.cell_code, groups_cells.id as cell_id, groups_cells.city FROM groups_cells,user WHERE user.id = groups_cells.leader AND groups_cells.active = 1 AND groups_cells.church_id = '$church_id' $query_g $filter_val";
-      	
+        
 
         $final_points = null;
 
-      	foreach ($con->query($sql_leader) as $row) {
+        foreach ($con->query($sql_leader) as $row) {
 
-      	  $leader_info = $row;
+          $leader_info = $row;
 
-      	  // obtain overall multiply global
+          // obtain overall multiply global
 
-      	  $cell_id = $row['cell_id'];
+          $cell_id = $row['cell_id'];
 
-      	  $pre_ac_cell = $con->prepare("SELECT count(id) as total_cells, (SELECT count(id) as last_cells FROM groups_cells WHERE active = 1 AND (created_at NOT BETWEEN '$initial_quarter' AND '$final_quarter') AND parent_id = '$cell_id' AND church_id = :church_id) as last_cells FROM groups_cells WHERE active = 1 AND parent_id = '$cell_id' AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          $pre_ac_cell = $con->prepare("SELECT count(id) as total_cells, (SELECT count(id) as last_cells FROM groups_cells WHERE active = 1 AND (created_at NOT BETWEEN '$initial_quarter' AND '$final_quarter') AND parent_id = '$cell_id' AND church_id = :church_id) as last_cells FROM groups_cells WHERE active = 1 AND parent_id = '$cell_id' AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
-      	  $values_ac_cell = array(':church_id' => $church_id);
-      	  $pre_ac_cell->execute($values_ac_cell);
-      	  $result_ac_cell = $pre_ac_cell->fetch();
+          $values_ac_cell = array(':church_id' => $church_id);
+          $pre_ac_cell->execute($values_ac_cell);
+          $result_ac_cell = $pre_ac_cell->fetch();
 
-      	  $total_cells = $result_ac_cell['total_cells'];
+          $total_cells = $result_ac_cell['total_cells'];
 
-      	  // last quarter
-      	  $total_last_cell = $result_ac_cell['last_cells'];
+          // last quarter
+          $total_last_cell = $result_ac_cell['last_cells'];
 
-      	  // obtain advance
-      	  $overall_advance = $total_cells - $total_last_cell;
+          // obtain advance
+          $overall_advance = $total_cells - $total_last_cell;
 
-      	  // obtain percentage and goal in church_goals
-      	  $pre_percen = $con->prepare("SELECT *,(SELECT percentage FROM `church_goals` WHERE goal = 2 AND church_id = :church_id) as percentage_ad, (SELECT value FROM `church_goals` WHERE goal = 2 AND church_id = :church_id) as goal_ad, (SELECT percentage FROM `church_goals` WHERE goal = 3 AND church_id = :church_id) as percentage_kd, (SELECT value FROM `church_goals` WHERE goal = 3 AND church_id = :church_id) as goal_kd FROM `church_goals` WHERE goal = 1 AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          // obtain percentage and goal in church_goals
+          $pre_percen = $con->prepare("SELECT *,(SELECT percentage FROM `church_goals` WHERE goal = 2 AND church_id = :church_id) as percentage_ad, (SELECT value FROM `church_goals` WHERE goal = 2 AND church_id = :church_id) as goal_ad, (SELECT percentage FROM `church_goals` WHERE goal = 3 AND church_id = :church_id) as percentage_kd, (SELECT value FROM `church_goals` WHERE goal = 3 AND church_id = :church_id) as goal_kd FROM `church_goals` WHERE goal = 1 AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
-      	  $pre_percen->execute($values_ac_cell);
-      	  $result_percen = $pre_percen->fetch();
+          $pre_percen->execute($values_ac_cell);
+          $result_percen = $pre_percen->fetch();
 
-      	  $percentage_gen = $result_percen['percentage'];
-      	  $goal_gen = $result_percen['value'];
+          $percentage_gen = $result_percen['percentage'];
+          $goal_gen = $result_percen['value'];
 
-      	  // whole percentage
-      	  $w_percentage = round($percentage_gen * 100);
+          // whole percentage
+          $w_percentage = round($percentage_gen * 100);
 
-      	  // obtain overall of multiply
-      	  $overall_multiply = $overall_advance * $w_percentage / $goal_gen;
+          // obtain overall of multiply
+          $overall_multiply = $overall_advance * $w_percentage / $goal_gen;
 
 
-      	  /*obtain cell_attendance global*/
+          /*obtain cell_attendance global*/
 
-      	  // obtain adult points
+          // obtain adult points
 
-      	  // actual quarter
-      	  $pre_ac_adults = $con->prepare("SELECT SUM(total_member_assistance + total_guest_assistance) as total_adults, (SELECT SUM(total_member_assistance + total_guest_assistance) as last_adults FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter2' AND '$final_quarter2') AND groups_cells.id = '$cell_id' AND groups_cells.church_id = :church_id) as last_adults, (SELECT SUM(total_kids_assistance) as total_kids FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id') as total_kids, (SELECT SUM(total_kids_assistance) as last_kids FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter2' AND '$final_quarter2') AND groups_cells.id = '$cell_id' AND groups_cells.church_id = :church_id) as last_kids FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id'", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          // actual quarter
+          $pre_ac_adults = $con->prepare("SELECT SUM(total_member_assistance + total_guest_assistance) as total_adults, (SELECT SUM(total_member_assistance + total_guest_assistance) as last_adults FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter2' AND '$final_quarter2') AND groups_cells.id = '$cell_id' AND groups_cells.church_id = :church_id) as last_adults, (SELECT SUM(total_kids_assistance) as total_kids FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id') as total_kids, (SELECT SUM(total_kids_assistance) as last_kids FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter2' AND '$final_quarter2') AND groups_cells.id = '$cell_id' AND groups_cells.church_id = :church_id) as last_kids FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id'", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
-      	  $values_ac_adults = array(':church_id' => $church_id);
-      	  $pre_ac_adults->execute($values_ac_adults);
-      	  $result_ac_adults = $pre_ac_adults->fetch();
+          $values_ac_adults = array(':church_id' => $church_id);
+          $pre_ac_adults->execute($values_ac_adults);
+          $result_ac_adults = $pre_ac_adults->fetch();
 
-      	  $total_adults = $result_ac_adults['total_adults'];
+          $total_adults = $result_ac_adults['total_adults'];
 
-      	  // last quarter
-      	  $total_last_adults = $result_ac_adults['last_adults'];
+          // last quarter
+          $total_last_adults = $result_ac_adults['last_adults'];
 
-      	  if ($total_adults == null) {
-      	    $total_adults = '0';
-      	  } else if ($total_last_adults == null) {
-      	    $total_last_adults = '0';
-      	  }
+          if ($total_adults == null) {
+            $total_adults = '0';
+          } else if ($total_last_adults == null) {
+            $total_last_adults = '0';
+          }
 
-      	  // obtain advance
-      	  $adults_advance = $total_adults - $total_last_adults;
+          // obtain advance
+          $adults_advance = $total_adults - $total_last_adults;
 
-      	  // obtain percentage and goal in church_goals
-      	  $percentage_ad = $result_percen['percentage_ad'];
-      	  $goal_ad = $result_percen['goal_ad'];
+          // obtain percentage and goal in church_goals
+          $percentage_ad = $result_percen['percentage_ad'];
+          $goal_ad = $result_percen['goal_ad'];
 
-      	  // whole percentage
-      	  $w_percentagead = round($percentage_ad * 100);
+          // whole percentage
+          $w_percentagead = round($percentage_ad * 100);
 
-      	  // obtain points of adults
-      	  $points_ad = $adults_advance * $w_percentagead / $goal_ad;
+          // obtain points of adults
+          $points_ad = $adults_advance * $w_percentagead / $goal_ad;
 
 
-      	  /*now obtain kids points*/
+          /*now obtain kids points*/
 
-      	  // actual quarter
-      	  $total_kids2 = $result_ac_adults['total_kids'];
+          // actual quarter
+          $total_kids2 = $result_ac_adults['total_kids'];
 
-      	  // last quarter
-      	  $total_last_kids = $result_ac_adults['last_kids'];
+          // last quarter
+          $total_last_kids = $result_ac_adults['last_kids'];
 
-      	  if ($total_kids2 == null) {
-      	    $total_kids2 = '0';
-      	  } else if ($total_last_kids == null) {
-      	    $total_last_kids = '0';
-      	  }
+          if ($total_kids2 == null) {
+            $total_kids2 = '0';
+          } else if ($total_last_kids == null) {
+            $total_last_kids = '0';
+          }
 
-      	  // obtain advance
-      	  $kids_advance = $total_kids2 - $total_last_kids;
+          // obtain advance
+          $kids_advance = $total_kids2 - $total_last_kids;
 
-      	  // obtain percentage and goal in church_goals
-      	  $percentage_kd = $result_percen['percentage_kd'];
-      	  $goal_kd = $result_percen['goal_kd'];
+          // obtain percentage and goal in church_goals
+          $percentage_kd = $result_percen['percentage_kd'];
+          $goal_kd = $result_percen['goal_kd'];
 
-      	  // whole percentage
-      	  $w_percentagekd = round($percentage_kd * 100);
+          // whole percentage
+          $w_percentagekd = round($percentage_kd * 100);
 
-      	  // obtain points of kids
-      	  $points_kd = $kids_advance * $w_percentagekd / $goal_kd;
+          // obtain points of kids
+          $points_kd = $kids_advance * $w_percentagekd / $goal_kd;
 
-      	  // FINAL OVERALL CELL ATTENDANCE
-      	  $overall_attend = $points_ad + $points_kd;
+          // FINAL OVERALL CELL ATTENDANCE
+          $overall_attend = $points_ad + $points_kd;
 
 
 
-      	  // obtain church_attendance global
+          // obtain church_attendance global
 
-      	  // actual quarter
-      	  $pre_ac_church = $con->prepare("SELECT SUM(total_doctrine + total_celebration) as total_doctrine, (SELECT SUM(total_doctrine + total_celebration) as last_church FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter2' AND '$final_quarter2') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id') as last_church FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id'", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          // actual quarter
+          $pre_ac_church = $con->prepare("SELECT SUM(total_doctrine + total_celebration) as total_doctrine, (SELECT SUM(total_doctrine + total_celebration) as last_church FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter2' AND '$final_quarter2') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id') as last_church FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id'", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
-      	  $values_ac_church = array(':church_id' => $church_id);
-      	  $pre_ac_church->execute($values_ac_church);
-      	  $result_ac_church = $pre_ac_church->fetch();
+          $values_ac_church = array(':church_id' => $church_id);
+          $pre_ac_church->execute($values_ac_church);
+          $result_ac_church = $pre_ac_church->fetch();
 
-      	  $total_doctrine = $result_ac_church['total_doctrine'];
+          $total_doctrine = $result_ac_church['total_doctrine'];
 
-      	  // last quarter
-      	  $total_last_church = $result_ac_church['last_church'];
+          // last quarter
+          $total_last_church = $result_ac_church['last_church'];
 
-      	  if ($total_doctrine == null) {
-      	    $total_doctrine = '0';
-      	  } else if ($total_last_church == null) {
-      	    $total_last_church = '0';
-      	  }
+          if ($total_doctrine == null) {
+            $total_doctrine = '0';
+          } else if ($total_last_church == null) {
+            $total_last_church = '0';
+          }
 
-      	  // obtain advance
-      	  $church_advance = $total_doctrine - $total_last_church;
+          // obtain advance
+          $church_advance = $total_doctrine - $total_last_church;
 
-      	  // obtain percentage and goal in church_goals
-      	  $pre_percen_ch = $con->prepare("SELECT * FROM `church_goals` WHERE goal = 4 AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          // obtain percentage and goal in church_goals
+          $pre_percen_ch = $con->prepare("SELECT * FROM `church_goals` WHERE goal = 4 AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
-      	  $pre_percen_ch->execute($values_ac_church);
-      	  $result_percen_ch = $pre_percen_ch->fetch();
+          $pre_percen_ch->execute($values_ac_church);
+          $result_percen_ch = $pre_percen_ch->fetch();
 
-      	  $percentage_ch = $result_percen_ch['percentage'];
-      	  $goal_ch = $result_percen_ch['value'];
+          $percentage_ch = $result_percen_ch['percentage'];
+          $goal_ch = $result_percen_ch['value'];
 
-      	  // whole percentage
-      	  $w_percentagech = round($percentage_ch * 100);
+          // whole percentage
+          $w_percentagech = round($percentage_ch * 100);
 
-      	  // obtain overall of church
-      	  $overall_church = $church_advance * $w_percentagech / $goal_ch;
+          // obtain overall of church
+          $overall_church = $church_advance * $w_percentagech / $goal_ch;
 
 
-      	  // obtain salvation global
+          // obtain salvation global
 
-      	  // actual quarter
-      	  $pre_ac_salv = $con->prepare("SELECT SUM(total_salvation) as total_salvation, (SELECT SUM(total_baptized) as total_baptized FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id') as total_baptized, (SELECT SUM(total_schedule_visits) as total_schedule_visits FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id') as total_schedule_visits FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id'", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          // actual quarter
+          $pre_ac_salv = $con->prepare("SELECT SUM(total_salvation) as total_salvation, (SELECT SUM(total_baptized) as total_baptized FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id') as total_baptized, (SELECT SUM(total_schedule_visits) as total_schedule_visits FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id') as total_schedule_visits FROM reports, groups_cells WHERE groups_cells.id = reports.cell_id AND (reports.created_at BETWEEN '$initial_quarter' AND '$final_quarter') AND groups_cells.church_id = :church_id AND groups_cells.id = '$cell_id'", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
-      	  $values_ac_salv = array(':church_id' => $church_id);
-      	  $pre_ac_salv->execute($values_ac_salv);
-      	  $result_ac_salv = $pre_ac_salv->fetch();
+          $values_ac_salv = array(':church_id' => $church_id);
+          $pre_ac_salv->execute($values_ac_salv);
+          $result_ac_salv = $pre_ac_salv->fetch();
 
-      	  $total_salvation = $result_ac_salv['total_salvation'];
+          $total_salvation = $result_ac_salv['total_salvation'];
 
-      	  // obtain percentage and goal in church_goals
-      	  $pre_percen_sv = $con->prepare("SELECT *, (SELECT percentage FROM `church_goals` WHERE goal = 6 AND church_id = :church_id) as percentage_bp, (SELECT value FROM `church_goals` WHERE goal = 6 AND church_id = :church_id) as goal_bp, (SELECT percentage FROM `church_goals` WHERE goal = 7 AND church_id = :church_id) as percentage_sch, (SELECT value FROM `church_goals` WHERE goal = 7 AND church_id = :church_id) as goal_sch FROM `church_goals` WHERE goal = 5 AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          // obtain percentage and goal in church_goals
+          $pre_percen_sv = $con->prepare("SELECT *, (SELECT percentage FROM `church_goals` WHERE goal = 6 AND church_id = :church_id) as percentage_bp, (SELECT value FROM `church_goals` WHERE goal = 6 AND church_id = :church_id) as goal_bp, (SELECT percentage FROM `church_goals` WHERE goal = 7 AND church_id = :church_id) as percentage_sch, (SELECT value FROM `church_goals` WHERE goal = 7 AND church_id = :church_id) as goal_sch FROM `church_goals` WHERE goal = 5 AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
-      	  $pre_percen_sv->execute($values_ac_salv);
-      	  $result_percen_sv = $pre_percen_sv->fetch();
+          $pre_percen_sv->execute($values_ac_salv);
+          $result_percen_sv = $pre_percen_sv->fetch();
 
-      	  $percentage_sv = $result_percen_sv['percentage'];
-      	  $goal_sv = $result_percen_sv['value'];
+          $percentage_sv = $result_percen_sv['percentage'];
+          $goal_sv = $result_percen_sv['value'];
 
-      	  // whole percentage
-      	  $w_percentagesv = round($percentage_sv * 100);
+          // whole percentage
+          $w_percentagesv = round($percentage_sv * 100);
 
-      	  // obtain points of salvation
-      	  $points_salvation = $total_salvation * $w_percentagesv / $goal_sv;
+          // obtain points of salvation
+          $points_salvation = $total_salvation * $w_percentagesv / $goal_sv;
 
 
-      	  // obtain baptized global
+          // obtain baptized global
 
-      	  // actual quarter
-      	  $total_baptized = $result_ac_salv['total_baptized'];
+          // actual quarter
+          $total_baptized = $result_ac_salv['total_baptized'];
 
-      	  // obtain percentage and goal in church_goals
-      	  $percentage_bp = $result_percen_sv['percentage_bp'];
-      	  $goal_bp = $result_percen_sv['goal_bp'];
+          // obtain percentage and goal in church_goals
+          $percentage_bp = $result_percen_sv['percentage_bp'];
+          $goal_bp = $result_percen_sv['goal_bp'];
 
-      	  // whole percentage
-      	  $w_percentagebp = round($percentage_bp * 100);
+          // whole percentage
+          $w_percentagebp = round($percentage_bp * 100);
 
-      	  // obtain points of salvation
-      	  $points_baptized = $total_baptized * $w_percentagebp / $goal_bp;
+          // obtain points of salvation
+          $points_baptized = $total_baptized * $w_percentagebp / $goal_bp;
 
 
-      	  // obtain scheduled global
+          // obtain scheduled global
 
-      	  // actual quarter
-      	  $total_schedule = $result_ac_salv['total_schedule_visits'];
+          // actual quarter
+          $total_schedule = $result_ac_salv['total_schedule_visits'];
 
-      	  // obtain percentage and goal in church_goals
-      	  $percentage_sch = $result_percen_sv['percentage_sch'];
-      	  $goal_sch = $result_percen_sv['goal_sch'];
+          // obtain percentage and goal in church_goals
+          $percentage_sch = $result_percen_sv['percentage_sch'];
+          $goal_sch = $result_percen_sv['goal_sch'];
 
-      	  // whole percentage
-      	  $w_per_sch = round($percentage_sch * 100);
+          // whole percentage
+          $w_per_sch = round($percentage_sch * 100);
 
-      	  // obtain points of schedule
-      	  $points_sche = $total_schedule * $w_per_sch / $goal_sch;
+          // obtain points of schedule
+          $points_sche = $total_schedule * $w_per_sch / $goal_sch;
 
-      	  // FINAL OVERALL PERFOMANCE
-      	  $overall_perfomance = $points_salvation + $points_baptized + $points_sche;
+          // FINAL OVERALL PERFOMANCE
+          $overall_perfomance = $points_salvation + $points_baptized + $points_sche;
 
-      	  /*** OVERALL CHURCH GLOBAL ***/
-      	  $overall_growth=  $overall_multiply + $overall_attend + $overall_church + $overall_perfomance;
+          /*** OVERALL CHURCH GLOBAL ***/
+          $overall_growth=  $overall_multiply + $overall_attend + $overall_church + $overall_perfomance;
 
-      	  $leader_info['points'] = (string)$overall_growth;
+          $leader_info['points'] = (string)$overall_growth;
 
-      	  $final_points[] = $leader_info;
+          $final_points[] = $leader_info;
 
-      	}
+        }
 
         if($final_points != null){
 
@@ -47744,9 +44292,9 @@ $app->post('/statistics/global/ranking', function ($request,$response) {
 
         }
 
-      	return $response->withStatus(200)
-      	                  ->withHeader('Content-Type', 'application/json')
-      	                  ->withJson(array('response' => $final_points));
+        return $response->withStatus(200)
+                          ->withHeader('Content-Type', 'application/json')
+                          ->withJson(array('response' => $final_points));
 
 
       } else if ($member == '2') {
@@ -47763,23 +44311,23 @@ $app->post('/statistics/global/ranking', function ($request,$response) {
 
 
         /*Obtain general information supervisors*/
-      	$sql_leader = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, user.profile_picture, groups_sectors.district_code, groups_sectors.zone_code, groups_sectors.sector_code, groups_sectors.id as sector_id, user.city FROM groups_sectors,user WHERE user.id = groups_sectors.supervisor AND groups_sectors.active = 1 AND groups_sectors.church_id = '$church_id' $query_g $filter_val";
+        $sql_leader = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, user.profile_picture, groups_sectors.district_code, groups_sectors.zone_code, groups_sectors.sector_code, groups_sectors.id as sector_id, user.city FROM groups_sectors,user WHERE user.id = groups_sectors.supervisor AND groups_sectors.active = 1 AND groups_sectors.church_id = '$church_id' $query_g $filter_val";
 
         $result_info = null;
 
-      	foreach ($con->query($sql_leader) as $row) {
+        foreach ($con->query($sql_leader) as $row) {
 
-      		$leader_info = $row;
+          $leader_info = $row;
 
-      		$sector_id = $row['sector_id'];
-      	 
+          $sector_id = $row['sector_id'];
+         
           /*Obtain cells asociated with supervisors (sector)*/
-      		$sql_leader2 = "SELECT groups_cells.id as cell_id, groups_cells.sector_id as sec_id FROM groups_cells WHERE groups_cells.sector_id = '$sector_id' AND groups_cells.active = 1 AND groups_cells.church_id = '$church_id'";
+          $sql_leader2 = "SELECT groups_cells.id as cell_id, groups_cells.sector_id as sec_id FROM groups_cells WHERE groups_cells.sector_id = '$sector_id' AND groups_cells.active = 1 AND groups_cells.church_id = '$church_id'";
 
-			    foreach ($con->query($sql_leader2) as $row2) {
+          foreach ($con->query($sql_leader2) as $row2) {
 
             /*cells asociated*/
-	      		$cell_id = $row2['cell_id'];
+            $cell_id = $row2['cell_id'];
 
             // obtain overall multiply
             $pre_ac_cell = $con->prepare("SELECT count(id) as total_cells, (SELECT count(id) as last_cells FROM groups_cells WHERE active = 1 AND (created_at NOT BETWEEN '$initial_quarter' AND '$final_quarter') AND parent_id = '$cell_id' AND church_id = :church_id) as last_cells FROM groups_cells WHERE active = 1 AND parent_id = '$cell_id' AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
@@ -47984,12 +44532,12 @@ $app->post('/statistics/global/ranking', function ($request,$response) {
 
             /*add points to array*/
             $leader_info['total'] = $overall_growth; 
-	      		$leader_info['number_c'] = 1;
+            $leader_info['number_c'] = 1;
 
-	      		$result_info[] = $leader_info;
-	      	}
+            $result_info[] = $leader_info;
+          }
 
-      	}
+        }
 
         /*validate result info is not null*/
         if ($result_info != null) {
@@ -48033,7 +44581,7 @@ $app->post('/statistics/global/ranking', function ($request,$response) {
         
 
 
-      	/*else member does not exist*/
+        /*else member does not exist*/
       } else if ($member == '3') {
         
         /*validate according to parent_id*/
@@ -48590,11 +45138,11 @@ $app->post('/statistics/global/ranking', function ($request,$response) {
 
         /*else member does not exist*/
       } else{
-      	return $response->withStatus(422)
-      	        ->withHeader('Content-Type', 'application/json')
-      	        ->withJson(array('error' => array(
-      	            "message"=>"Member does not exist",
-      	            "status"=>422)));
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "message"=>"Member does not exist",
+                    "status"=>422)));
       }
 
 
@@ -53222,1517 +49770,6 @@ $app->post('/download/group-list', function ($request,$response) {
 });
 
 
-$app->post('/download/member-list', function ($request,$response) {
-
-  try{
-   $con = $this->db;
-   $user_id = $request->getParam('user_id');
-   $role_id = $request->getParam('role_id');
-   $church_id = $request->getParam('church_id');
-   $parent_id = $request->getParam('parent_id');
-   $active = $request->getParam('active');
-   $type_member = $request->getParam('type_member');
-   $type_report = $request->getParam('type_report');
-
-   $filter_district = $request->getParam('filter_district');
-   $filter_zone = $request->getParam('filter_zone');
-   $filter_sector = $request->getParam('filter_sector');
-   $filter_cell = $request->getParam('filter_cell');
-
-   if(empty($user_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-              "type"=>"required",
-               "message"=>"Missing parameter: user_id",
-               "status"=>500)));
-   } else if(empty($role_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-              "type"=>"required",
-               "message"=>"Missing parameter: role_id",
-               "status"=>500)));
-   } else if(empty($church_id)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-              "type"=>"required",
-               "message"=>"Missing parameter: church_id",
-               "status"=>500)));
-   } else if(empty($type_member)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-              "type"=>"required",
-               "message"=>"Missing parameter: type_member",
-               "status"=>500)));
-   } else if(empty($type_report)){
-      return $response->withStatus(500)
-              ->withHeader('Content-Type', 'application/json')
-              ->withJson(array('error' => array(
-                "type"=>"required",
-                "message"=>"Missing parameter: type_report",
-                "status"=>500)));
-
-   }
-
-
-  $pre_i = $con->prepare("SELECT *
-                           FROM user
-                           WHERE id = :user_id AND rol = :role_id AND church_id = :church_id AND status = '1'", 
-                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-  $values_i = array(':user_id' => $user_id,':role_id' => $role_id, ':church_id' => $church_id);
-  $pre_i->execute($values_i);
-  $result_i = $pre_i->fetch();
-
-  if ($result_i) {
-
-    /*obtain church name and city*/
-    $pre_ch = $con->prepare("SELECT *
-                             FROM churches
-                             WHERE id = :church_id", 
-                             array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-    $values_ch = array(':church_id' => $church_id);
-    $pre_ch->execute($values_ch);
-    $result_ch = $pre_ch->fetch();
-
-    $church_name = $result_ch['name'];
-    $church_city = $result_ch['city'];
-
-    $final_date = date("Y-m-d H:i");
-
-    // download list cells
-    if ($type_member == 'guest'){
-
-        $filter_list = '';
-        
-        if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
-
-          /*if select filter list*/
-          if ($filter_district && empty($filter_zone) && empty($filter_sector) && empty($filter_cell)) {
-
-            $filter_list = "AND groups_zones.district_id = $filter_district";
-
-
-          } else if ($filter_district && $filter_zone && empty($filter_sector) && empty($filter_cell)) {
-
-            $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone";
-
-          } else if ($filter_district && $filter_zone && $filter_sector && empty($filter_cell)) {
-
-            $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector";
-
-          } else if ($filter_district && $filter_zone && $filter_sector && $filter_cell) {
-
-            $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
-            
-          }
-
-          $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_zones, groups_sectors, groups_cells, members_cells WHERE groups_sectors.zone_id = groups_zones.id AND groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_zones.church_id = $church_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1 $filter_list";
-          
-
-        }else if ($role_id == '2') {
-
-            if(empty($parent_id)){
-                  return $response->withStatus(500)
-                         ->withHeader('Content-Type', 'application/json')
-                         ->withJson(array('error' => array(
-                           "type"=>"required",
-                           "message"=>"Missing parameter: parent_id",
-                           "status"=>500)));
-            }
-
-            /*if select filter list*/
-            if ($filter_zone && empty($filter_sector) && empty($filter_cell)) {
-
-              $filter_list = "AND groups_sectors.zone_id = $filter_zone";
-
-            } else if ($filter_zone && $filter_sector && empty($filter_cell)) {
-
-              $filter_list = "AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector";
-
-            } else if ($filter_zone && $filter_sector && $filter_cell) {
-
-              $filter_list = "AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
-
-            }
-
-            $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_zones, groups_sectors, groups_cells, members_cells WHERE groups_sectors.zone_id = groups_zones.id AND groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_zones.church_id = 1 AND groups_zones.district_id = $parent_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1 $filter_list";
-            
-            
-        } else if ($role_id == '3') {
-
-            if(empty($parent_id)){
-                  return $response->withStatus(500)
-                         ->withHeader('Content-Type', 'application/json')
-                         ->withJson(array('error' => array(
-                           "type"=>"required",
-                           "message"=>"Missing parameter: parent_id",
-                           "status"=>500)));
-            }
-
-            /*if select filter list*/
-            if ($filter_sector && empty($filter_cell)) {
-
-              $filter_list = "AND groups_cells.sector_id = $filter_sector";
-
-            } else if ($filter_sector && $filter_cell) {
-
-              $filter_list = "AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
-
-            } 
-
-            $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_sectors, groups_cells, members_cells WHERE groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_sectors.zone_id = $parent_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1 $filter_list";
-
-            
-        } else if ($role_id == '4') {
-          
-          if(empty($parent_id)){
-                return $response->withStatus(500)
-                       ->withHeader('Content-Type', 'application/json')
-                       ->withJson(array('error' => array(
-                         "type"=>"required",
-                         "message"=>"Missing parameter: parent_id",
-                         "status"=>500)));
-          }
-
-          /*if select filter list*/
-          if ($filter_cell) {
-
-            $filter_list = "AND groups_cells.id = $filter_cell";
-
-          }
-
-          $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance 
-          FROM groups_cells, members_cells WHERE members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = $parent_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1 $filter_list";
-
-
-        } else if ($role_id == '5') {
-
-          if(empty($parent_id)){
-                return $response->withStatus(500)
-                       ->withHeader('Content-Type', 'application/json')
-                       ->withJson(array('error' => array(
-                         "type"=>"required",
-                         "message"=>"Missing parameter: parent_id",
-                         "status"=>500)));
-          }
-            
-          $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_cells, members_cells WHERE members_cells.cell_id = groups_cells.id AND groups_cells.id = $parent_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1";
-
-
-        }else{ // else role not exist
-
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "type"=>"role_doesnt_exist",
-                        "message"=>"Role does not exist",
-                        "status"=>422)));
-        }
-
-        // DOWNLOADS
-        if ($type_report == 'csv') {
-          
-          $stream = fopen('php://memory', 'w+');
-
-          $row = array('INVITADOS', 'ID', 'ÚLTIMA ASISTENCIA','CIUDAD','ASISTENCIA');
-          fputcsv($stream, $row, ';');
-
-          foreach ($con->query($sql) as $row) {
-            if ($row['full_name'] == ' ') {
-              $row['full_name'] = '--';
-            }
-            if ($row['last_assistance'] == null) {
-              $row['last_assistance'] = '--';
-            }
-            if ($row['city'] == null) {
-              $row['city'] = '--';
-            }
-            $guest[] = $row;
-            fputcsv($stream, $row, ';');
-
-          }
-          
-          rewind($stream);
-
-          $response = $response->withHeader('Content-Type', 'text/csv');
-          $response = $response->withHeader('Content-Disposition', 'attachment; filename="listado_invitados.csv"');
-
-          return $response->withBody(new \Slim\Http\Stream($stream));
-
-        } else if ($type_report == 'pdf'){
-
-          // create new PDF document
-          $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
-
-          // set document information
-          $pdf->SetCreator('PDF');
-          $pdf->SetAuthor('C+');
-          $pdf->SetTitle('Listado Invitados');
-          $pdf->SetSubject('Listado Invitados');
-          $pdf->SetKeywords('');
-
-          // set default header data
-          $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
-          $pdf->setFooterData(array(0,64,0), array(0,64,128));
-
-          // set header and footer fonts
-          $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
-          $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
-
-          // set default monospaced font
-          $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
-
-          // set margins
-          $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
-          $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
-          $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
-
-          // set auto page breaks
-          $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
-
-          // set image scale factor
-          $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
-
-          // set default font subsetting mode
-          $pdf->setFontSubsetting(true);
-
-          // Set font
-          $pdf->SetFont('helvetica', '', 12, '', true);
-
-          // Add a page
-          $pdf->AddPage();
-
-          // Set some content to print
-          $html ='
-          <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>Ciudad:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>Listado de invitados</b><br>Exportado: ' .$final_date. '</p>
-          <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
-          <th width= "170" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>INVITADOS</b></th>
-          <th width= "120" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>ID</b></th>
-          <th width= "110" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>ÚLTIMA ASISTENCIA</b></th>
-          <th width= "130" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>CIUDAD</b></th>
-          <th width="100" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>ASISTENCIA</b></th></tr>';
-
-          foreach ($con->query($sql) as $row) {
-            if ($row['full_name'] == ' ') {
-              $row['full_name'] = '--';
-            }
-            if ($row['last_assistance'] == null) {
-              $row['last_assistance'] = '--';
-            }
-            if ($row['city'] == null) {
-              $row['city'] = '--';
-            }
-            $html.='
-                <tr>
-                  <td style="height: 30px;">' . $row['full_name'] . '</td>
-                  <td style="height: 30px;">' . $row['cell_id'] . '</td>
-                  <td style="height: 30px;">' . $row['last_assistance'] . '</td>
-                  <td style="height: 30px;">' . $row['city'] . '</td>
-                  <td style="height: 30px;">' . $row['assistance'] . '</td>
-                </tr>';
-          }
-          $html.='</table>';
-
-          // Print text using writeHTML
-          $pdf->writeHTML($html, true, false, false, false, '');
-
-          // Close and output PDF document
-          $pdf->Output('listado_invitados.pdf', 'D');
-
-        }else{
-          return $response->withStatus(422)
-                          ->withHeader('Content-Type', 'application/json')
-                          ->withJson(array('error' => array(
-                                    "message"=>"Type report does not exist",
-                                    "status"=>422)));
-        }
-
-
-
-
-    } else if ($type_member == 'member'){
-
-
-      $filter_list = '';
-
-      /*agregar codigo de cell member list*/
-      
-      if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
-
-        /*if select filter list*/
-        if ($filter_district && empty($filter_zone) && empty($filter_sector) && empty($filter_cell)) {
-
-          $filter_list = "AND groups_zones.district_id = $filter_district";
-
-
-        } else if ($filter_district && $filter_zone && empty($filter_sector) && empty($filter_cell)) {
-
-          $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone";
-
-        } else if ($filter_district && $filter_zone && $filter_sector && empty($filter_cell)) {
-
-          $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector";
-
-        } else if ($filter_district && $filter_zone && $filter_sector && $filter_cell) {
-
-          $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
-          
-        }
-
-        $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance,members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_zones, groups_sectors, groups_cells, members_cells WHERE groups_sectors.zone_id = groups_zones.id AND groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_zones.church_id = $church_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1 $filter_list";
-        
-
-      }else if ($role_id == '2') {
-
-          if(empty($parent_id)){
-                return $response->withStatus(500)
-                       ->withHeader('Content-Type', 'application/json')
-                       ->withJson(array('error' => array(
-                         "type"=>"required",
-                         "message"=>"Missing parameter: parent_id",
-                         "status"=>500)));
-          }
-
-          /*if select filter list*/
-          if ($filter_zone && empty($filter_sector) && empty($filter_cell)) {
-
-            $filter_list = "AND groups_sectors.zone_id = $filter_zone";
-
-          } else if ($filter_zone && $filter_sector && empty($filter_cell)) {
-
-            $filter_list = "AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector";
-
-          } else if ($filter_zone && $filter_sector && $filter_cell) {
-
-            $filter_list = "AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
-
-          }
-
-          $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_zones, groups_sectors, groups_cells, members_cells WHERE groups_sectors.zone_id = groups_zones.id AND groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_zones.church_id = 1 AND groups_zones.district_id = $parent_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1 $filter_list";
-          
-          
-      } else if ($role_id == '3') {
-
-          if(empty($parent_id)){
-                return $response->withStatus(500)
-                       ->withHeader('Content-Type', 'application/json')
-                       ->withJson(array('error' => array(
-                         "type"=>"required",
-                         "message"=>"Missing parameter: parent_id",
-                         "status"=>500)));
-          }
-
-          /*if select filter list*/
-          if ($filter_sector && empty($filter_cell)) {
-
-            $filter_list = "AND groups_cells.sector_id = $filter_sector";
-
-          } else if ($filter_sector && $filter_cell) {
-
-            $filter_list = "AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
-
-          } 
-
-          $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_sectors, groups_cells, members_cells WHERE groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_sectors.zone_id = $parent_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1 $filter_list";
-
-          
-      } else if ($role_id == '4') {
-        
-        if(empty($parent_id)){
-              return $response->withStatus(500)
-                     ->withHeader('Content-Type', 'application/json')
-                     ->withJson(array('error' => array(
-                       "type"=>"required",
-                       "message"=>"Missing parameter: parent_id",
-                       "status"=>500)));
-        }
-
-        /*if select filter list*/
-        if ($filter_cell) {
-
-          $filter_list = "AND groups_cells.id = $filter_cell";
-
-        }
-
-        $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance 
-        FROM groups_cells, members_cells WHERE members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = $parent_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1 $filter_list";
-
-
-      } else if ($role_id == '5') {
-
-        if(empty($parent_id)){
-              return $response->withStatus(500)
-                     ->withHeader('Content-Type', 'application/json')
-                     ->withJson(array('error' => array(
-                       "type"=>"required",
-                       "message"=>"Missing parameter: parent_id",
-                       "status"=>500)));
-        }
-          
-        $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_cells, members_cells WHERE members_cells.cell_id = groups_cells.id AND groups_cells.id = $parent_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1";
-
-
-      }else{ // else role not exist
-
-          return $response->withStatus(422)
-                  ->withHeader('Content-Type', 'application/json')
-                  ->withJson(array('error' => array(
-                      "type"=>"role_doesnt_exist",
-                      "message"=>"Role does not exist",
-                      "status"=>422)));
-      }
-
-      // DOWNLOADS
-      if ($type_report == 'csv') {
-        
-        $stream = fopen('php://memory', 'w+');
-
-        $row = array('MIEMBROS', 'ID', 'ÚLTIMA ASISTENCIA','CIUDAD','ASISTENCIA');
-        fputcsv($stream, $row, ';');
-
-        foreach ($con->query($sql) as $row) {
-          if ($row['full_name'] == ' ') {
-            $row['full_name'] = '--';
-          }
-          if ($row['last_assistance'] == null) {
-            $row['last_assistance'] = '--';
-          }
-          if ($row['city'] == null) {
-            $row['city'] = '--';
-          }
-          $guest[] = $row;
-          fputcsv($stream, $row, ';');
-
-        }
-        
-        rewind($stream);
-
-        $response = $response->withHeader('Content-Type', 'text/csv');
-        $response = $response->withHeader('Content-Disposition', 'attachment; filename="listado_miembros.csv"');
-
-        return $response->withBody(new \Slim\Http\Stream($stream));
-
-      } else if ($type_report == 'pdf'){
-
-        // create new PDF document
-        $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
-
-        // set document information
-        $pdf->SetCreator('PDF');
-        $pdf->SetAuthor('C+');
-        $pdf->SetTitle('Listado Miembros');
-        $pdf->SetSubject('Listado Miembros');
-        $pdf->SetKeywords('');
-
-        // set default header data
-        $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
-        $pdf->setFooterData(array(0,64,0), array(0,64,128));
-
-        // set header and footer fonts
-        $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
-        $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
-
-        // set default monospaced font
-        $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
-
-        // set margins
-        $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
-        $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
-        $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
-
-        // set auto page breaks
-        $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
-
-        // set image scale factor
-        $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
-
-        // set default font subsetting mode
-        $pdf->setFontSubsetting(true);
-
-        // Set font
-        $pdf->SetFont('helvetica', '', 12, '', true);
-
-        // Add a page
-        $pdf->AddPage();
-
-        // Set some content to print
-        $html ='
-        <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>Ciudad:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>Listado de miembros de célula</b><br>Exportado: ' .$final_date. '</p>
-        <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
-        <th width= "170" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>MIEMBROS</b></th>
-        <th width= "120" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>ID</b></th>
-        <th width= "110" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>ÚLTIMA ASISTENCIA</b></th>
-        <th width= "130" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>CIUDAD</b></th>
-        <th width="100" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>ASISTENCIA</b></th></tr>';
-
-        foreach ($con->query($sql) as $row) {
-          if ($row['full_name'] == ' ') {
-            $row['full_name'] = '--';
-          }
-          if ($row['last_assistance'] == null) {
-            $row['last_assistance'] = '--';
-          }
-          if ($row['city'] == null) {
-            $row['city'] = '--';
-          }
-          $html.='
-              <tr>
-                <td style="height: 30px;">' . $row['full_name'] . '</td>
-                <td style="height: 30px;">' . $row['cell_id'] . '</td>
-                <td style="height: 30px;">' . $row['last_assistance'] . '</td>
-                <td style="height: 30px;">' . $row['city'] . '</td>
-                <td style="height: 30px;">' . $row['assistance'] . '</td>
-              </tr>';
-        }
-        $html.='</table>';
-
-        // Print text using writeHTML
-        $pdf->writeHTML($html, true, false, false, false, '');
-
-        // Close and output PDF document
-        $pdf->Output('listado_miembros.pdf', 'D');
-
-      }else{
-        return $response->withStatus(422)
-                        ->withHeader('Content-Type', 'application/json')
-                        ->withJson(array('error' => array(
-                                  "message"=>"Type report does not exist",
-                                  "status"=>422)));
-      }
-
-
-    } else if ($type_member == 'leader'){
-
-      if ($active == '0' || $active == '1') {
-
-        $filter_list = '';
-        
-        if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
-
-          /*if select filter list*/
-          if ($filter_district && empty($filter_zone) && empty($filter_sector)) {
-
-            $filter_list = "AND user_groups.district_id = $filter_district";
-
-
-          } else if ($filter_district && $filter_zone && empty($filter_sector)) {
-
-            $filter_list = "AND user_groups.district_id = $filter_district AND user_groups.zone_id = $filter_zone";
-
-          } else if ($filter_district && $filter_zone && $filter_sector) {
-
-            $filter_list = "AND user_groups.district_id = $filter_district AND user_groups.zone_id = $filter_zone AND user_groups.sector_id = $filter_sector";
-
-          }
-
-          // if cell_id exist, else sector_id
-          $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.district_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' Z', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.zone_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' S', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.sector_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)),IF(user_groups.cell_id IS NOT NULL, CONCAT(' C',(SELECT groups_cells.cell_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id)), '')) as cell_group, user.city, IF(user_groups.cell_id IS NOT NULL, (SELECT count(members_cells.id) FROM members_cells where members_cells.cell_id = user_groups.cell_id and members_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1'), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 5 AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
-          
-
-        }else if ($role_id == '2') {
-
-            if(empty($parent_id)){
-                  return $response->withStatus(500)
-                         ->withHeader('Content-Type', 'application/json')
-                         ->withJson(array('error' => array(
-                           "message"=>"Missing parameter: parent_id",
-                           "status"=>500)));
-            }
-
-            /*if select filter list*/
-            if ($filter_zone && empty($filter_sector)) {
-
-              $filter_list = "AND user_groups.zone_id = $filter_zone";
-
-
-            } else if ($filter_zone && $filter_sector) {
-
-              $filter_list = "AND user_groups.zone_id = $filter_zone AND user_groups.sector_id = $filter_sector";
-
-            }
-
-            $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.district_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' Z', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.zone_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' S', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.sector_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)),IF(user_groups.cell_id IS NOT NULL, CONCAT(' C', (SELECT groups_cells.cell_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id)), '')) as cell_group, user.city, IF(user_groups.cell_id IS NOT NULL, (SELECT count(members_cells.id) FROM members_cells where members_cells.cell_id = user_groups.cell_id and members_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1'), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 5 AND user_groups.district_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
-            
-            
-        } else if ($role_id == '3') {
-
-            if(empty($parent_id)){
-                  return $response->withStatus(500)
-                         ->withHeader('Content-Type', 'application/json')
-                         ->withJson(array('error' => array(
-                           "message"=>"Missing parameter: parent_id",
-                           "status"=>500)));
-            }
-
-            /*if select filter list*/
-            if ($filter_sector) {
-              $filter_list = "AND user_groups.sector_id = $filter_sector";
-
-            }
-
-            $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.district_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' Z', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.zone_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' S', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.sector_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)),IF(user_groups.cell_id IS NOT NULL, CONCAT(' C', (SELECT groups_cells.cell_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id)), '')) as cell_group, user.city, IF(user_groups.cell_id IS NOT NULL, (SELECT count(members_cells.id) FROM members_cells where members_cells.cell_id = user_groups.cell_id and members_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1'), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 5 AND user_groups.zone_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
-
-            
-        } else if ($role_id == '4') {
-          
-          if(empty($parent_id)){
-                return $response->withStatus(500)
-                       ->withHeader('Content-Type', 'application/json')
-                       ->withJson(array('error' => array(
-                         "message"=>"Missing parameter: parent_id",
-                         "status"=>500)));
-          }
-
-          $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.district_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' Z', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.zone_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' S', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.sector_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)),IF(user_groups.cell_id IS NOT NULL, CONCAT(' C', (SELECT groups_cells.cell_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id)), '')) as cell_group, user.city, IF(user_groups.cell_id IS NOT NULL, (SELECT count(members_cells.id) FROM members_cells where members_cells.cell_id = user_groups.cell_id and members_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1'), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 5 AND user_groups.sector_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
-
-
-        } else{ // else role not exist
-
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Role does not exist",
-                        "status"=>422)));
-        }
-
-        // DOWNLOADS
-        if ($type_report == 'csv') {
-          
-          $stream = fopen('php://memory', 'w+');
-
-          $row = array('LEADER', 'CELL GROUP','CITY','MEMBERS');
-          fputcsv($stream, $row, ';');
-
-          foreach ($con->query($sql) as $row) {
-            if ($row['full_name'] == ' ') {
-              $row['full_name'] = '--';
-            }
-            if ($row['city'] == null) {
-              $row['city'] = '--';
-            }
-            $guest[] = $row;
-            fputcsv($stream, $row, ';');
-
-          }
-          
-          rewind($stream);
-
-          $response = $response->withHeader('Content-Type', 'text/csv');
-          $response = $response->withHeader('Content-Disposition', 'attachment; filename="leaders_list.csv"');
-
-          return $response->withBody(new \Slim\Http\Stream($stream));
-
-        } else if ($type_report == 'pdf'){
-
-          // create new PDF document
-          $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
-
-          // set document information
-          $pdf->SetCreator('PDF');
-          $pdf->SetAuthor('C+');
-          $pdf->SetTitle('Leaders List');
-          $pdf->SetSubject('Leaders List');
-          $pdf->SetKeywords('');
-
-          // set default header data
-          $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
-          $pdf->setFooterData(array(0,64,0), array(0,64,128));
-
-          // set header and footer fonts
-          $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
-          $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
-
-          // set default monospaced font
-          $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
-
-          // set margins
-          $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
-          $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
-          $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
-
-          // set auto page breaks
-          $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
-
-          // set image scale factor
-          $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
-
-          // set default font subsetting mode
-          $pdf->setFontSubsetting(true);
-
-          // Set font
-          $pdf->SetFont('helvetica', '', 12, '', true);
-
-          // Add a page
-          $pdf->AddPage();
-
-          // Set some content to print
-          $html ='
-          <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>City:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>Leaders List</b><br>Exported: ' .$final_date. '</p>
-          <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
-          <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>LEADER</b></th>
-          <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>CELL GROUP</b></th>
-          <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>CITY</b></th>
-          <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>MEMBERS</b></th></tr>';
-
-          foreach ($con->query($sql) as $row) {
-            if ($row['full_name'] == ' ') {
-              $row['full_name'] = '--';
-            }
-            if ($row['city'] == null) {
-              $row['city'] = '--';
-            }
-            $html.='
-                <tr>
-                  <td style="height: 30px;">' . $row['full_name'] . '</td>
-                  <td style="height: 30px;">' . $row['cell_group'] . '</td>
-                  <td style="height: 30px;">' . $row['city'] . '</td>
-                  <td style="height: 30px;">' . $row['members'] . '</td>
-                </tr>';
-          }
-          $html.='</table>';
-
-          // Print text using writeHTML
-          $pdf->writeHTML($html, true, false, false, false, '');
-
-          // Close and output PDF document
-          $pdf->Output('leaders_list.pdf', 'D');
-
-        }else{
-          return $response->withStatus(422)
-                          ->withHeader('Content-Type', 'application/json')
-                          ->withJson(array('error' => array(
-                                    "message"=>"Type report does not exist",
-                                    "status"=>422)));
-        }
-
-
-      } else{
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "message"=>"Filter active does not exist",
-                    "status"=>422)));
-      }
-
-
-    } else if ($type_member == 'supervisor'){
-
-      if ($active == '0' || $active == '1') {
-
-        $filter_list = '';
-        
-        if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
-
-          /*if select filter list*/
-          if ($filter_district && empty($filter_zone)) {
-
-            $filter_list = "AND user_groups.district_id = $filter_district";
-
-          } else if ($filter_district && $filter_zone) {
-
-            $filter_list = "AND user_groups.district_id = $filter_district AND user_groups.zone_id = $filter_zone";
-
-          }
-
-          // if cell_id exist, else sector_id
-          $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.district_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), ' Z', IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.zone_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), IF(user_groups.sector_id IS NOT NULL, CONCAT(' S',(SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), '')) as sector, user.city, IF(user_groups.sector_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells where groups_cells.sector_id = user_groups.sector_id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.sector_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells WHERE members_cells.church_id = $church_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = user_groups.sector_id AND groups_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 4 AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
-          
-
-        }else if ($role_id == '2') {
-
-            if(empty($parent_id)){
-                  return $response->withStatus(500)
-                         ->withHeader('Content-Type', 'application/json')
-                         ->withJson(array('error' => array(
-                           "message"=>"Missing parameter: parent_id",
-                           "status"=>500)));
-            }
-
-            /*if select filter list*/
-            if ($filter_zone) {
-
-              $filter_list = "AND user_groups.zone_id = $filter_zone";
-
-            } 
-
-            $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.district_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), ' Z', IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.zone_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), IF(user_groups.sector_id IS NOT NULL, CONCAT(' S',(SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), '')) as sector, user.city, IF(user_groups.sector_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells where groups_cells.sector_id = user_groups.sector_id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.sector_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells WHERE members_cells.church_id = $church_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = user_groups.sector_id AND groups_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 4 AND user_groups.district_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
-            
-            
-        } else if ($role_id == '3') {
-
-            if(empty($parent_id)){
-                  return $response->withStatus(500)
-                         ->withHeader('Content-Type', 'application/json')
-                         ->withJson(array('error' => array(
-                           "message"=>"Missing parameter: parent_id",
-                           "status"=>500)));
-            }
-
-
-            $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.district_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), ' Z', IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.zone_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), IF(user_groups.sector_id IS NOT NULL, CONCAT(' S',(SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), '')) as sector, user.city, IF(user_groups.sector_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells where groups_cells.sector_id = user_groups.sector_id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.sector_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells WHERE members_cells.church_id = $church_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = user_groups.sector_id AND groups_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 4 AND user_groups.zone_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active";
-
-            
-        } else{ // else role not exist
-
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Role does not exist",
-                        "status"=>422)));
-        }
-
-        // DOWNLOADS
-        if ($type_report == 'csv') {
-          
-          $stream = fopen('php://memory', 'w+');
-
-          $row = array('SUPERVISOR', 'SECTOR','CITY','LEADERS','MEMBERS');
-          fputcsv($stream, $row, ';');
-
-          foreach ($con->query($sql) as $row) {
-            if ($row['full_name'] == ' ') {
-              $row['full_name'] = '--';
-            }
-            if ($row['city'] == null) {
-              $row['city'] = '--';
-            }
-            $supervisors[] = $row;
-            fputcsv($stream, $row, ';');
-
-          }
-          
-          rewind($stream);
-
-          $response = $response->withHeader('Content-Type', 'text/csv');
-          $response = $response->withHeader('Content-Disposition', 'attachment; filename="supervisors_list.csv"');
-
-          return $response->withBody(new \Slim\Http\Stream($stream));
-
-        } else if ($type_report == 'pdf'){
-
-          // create new PDF document
-          $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
-
-          // set document information
-          $pdf->SetCreator('PDF');
-          $pdf->SetAuthor('C+');
-          $pdf->SetTitle('Supervisors List');
-          $pdf->SetSubject('Supervisors List');
-          $pdf->SetKeywords('');
-
-          // set default header data
-          $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
-          $pdf->setFooterData(array(0,64,0), array(0,64,128));
-
-          // set header and footer fonts
-          $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
-          $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
-
-          // set default monospaced font
-          $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
-
-          // set margins
-          $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
-          $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
-          $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
-
-          // set auto page breaks
-          $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
-
-          // set image scale factor
-          $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
-
-          // set default font subsetting mode
-          $pdf->setFontSubsetting(true);
-
-          // Set font
-          $pdf->SetFont('helvetica', '', 12, '', true);
-
-          // Add a page
-          $pdf->AddPage();
-
-          // Set some content to print
-          $html ='
-          <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>City:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>Supervisors List</b><br>Exported: ' .$final_date. '</p>
-          <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
-          <th width= "170" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>SUPERVISOR</b></th>
-          <th  width= "120" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>SECTOR</b></th>
-          <th width= "130" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>CITY</b></th>
-          <th width="110" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>LEADERS</b></th>
-          <th width="100"style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>MEMBERS</b></th></tr>';
-
-          foreach ($con->query($sql) as $row) {
-            if ($row['full_name'] == ' ') {
-              $row['full_name'] = '--';
-            }
-            if ($row['city'] == null) {
-              $row['city'] = '--';
-            }
-            $html.='
-                <tr>
-                  <td style="height: 30px;">' . $row['full_name'] . '</td>
-                  <td style="height: 30px;">' . $row['sector'] . '</td>
-                  <td style="height: 30px;">' . $row['city'] . '</td>
-                  <td style="height: 30px;">' . $row['leaders'] . '</td>
-                  <td style="height: 30px;">' . $row['members'] . '</td>
-                </tr>';
-          }
-          $html.='</table>';
-
-          // Print text using writeHTML
-          $pdf->writeHTML($html, true, false, false, false, '');
-
-          // Close and output PDF document
-          $pdf->Output('supervisors_list.pdf', 'D');
-
-        }else{
-          return $response->withStatus(422)
-                          ->withHeader('Content-Type', 'application/json')
-                          ->withJson(array('error' => array(
-                                    "message"=>"Type report does not exist",
-                                    "status"=>422)));
-        }
-
-
-      } else{
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "message"=>"Filter active does not exist",
-                    "status"=>422)));
-      }
-
-
-    } else if ($type_member == 'zone_pastor'){
-
-      if ($active == '0' || $active == '1') {
-
-        $filter_list = '';
-        
-        if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
-
-          /*if select filter list*/
-          if ($filter_district) {
-            $filter_list = "AND user_groups.district_id = $filter_district";
-          }
-
-          // if cell_id exist, else sector_id
-          $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.zone_id IS NOT NULL, (SELECT groups_zones.district_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id), (SELECT groups_districts.district_code FROM groups_districts where groups_districts.id = user_groups.district_id and groups_districts.church_id = $church_id)), IF(user_groups.zone_id IS NOT NULL, CONCAT(' Z',(SELECT groups_zones.zone_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), '')) as zone, user.city, IF(user_groups.zone_id != 'NULL', (SELECT count(groups_sectors.supervisor) from groups_sectors where groups_sectors.zone_id = user_groups.zone_id and groups_sectors.church_id = $church_id), '0') as supervisors, IF(user_groups.zone_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells, groups_sectors where groups_sectors.zone_id = user_groups.zone_id and groups_cells.sector_id = groups_sectors.id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.zone_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells, groups_sectors WHERE members_cells.church_id = $church_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = groups_sectors.id AND groups_sectors.zone_id = user_groups.zone_id AND groups_cells.church_id = $church_id AND groups_sectors.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 3 AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
-          
-
-        }else if ($role_id == '2') {
-
-            if(empty($parent_id)){
-                  return $response->withStatus(500)
-                         ->withHeader('Content-Type', 'application/json')
-                         ->withJson(array('error' => array(
-                           "message"=>"Missing parameter: parent_id",
-                           "status"=>500)));
-            } 
-
-            $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.zone_id IS NOT NULL, (SELECT groups_zones.district_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id), (SELECT groups_districts.district_code FROM groups_districts where groups_districts.id = user_groups.district_id and groups_districts.church_id = $church_id)), IF(user_groups.zone_id IS NOT NULL, CONCAT(' Z',(SELECT groups_zones.zone_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), '')) as zone, user.city, IF(user_groups.zone_id != 'NULL', (SELECT count(groups_sectors.supervisor) from groups_sectors where groups_sectors.zone_id = user_groups.zone_id and groups_sectors.church_id = $church_id), '0') as supervisors, IF(user_groups.zone_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells, groups_sectors where groups_sectors.zone_id = user_groups.zone_id and groups_cells.sector_id = groups_sectors.id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.zone_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells, groups_sectors WHERE members_cells.church_id = $church_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = groups_sectors.id AND groups_sectors.zone_id = user_groups.zone_id AND groups_cells.church_id = $church_id AND groups_sectors.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 3 AND user_groups.district_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
-            
-            
-        } else{ // else role not exist
-
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Role does not exist",
-                        "status"=>422)));
-        }
-
-        // DOWNLOADS
-        if ($type_report == 'csv') {
-          
-          $stream = fopen('php://memory', 'w+');
-
-          $row = array('ZONE PASTOR', 'ZONE','CITY','SUPERVISORS','LEADERS','MEMBERS');
-          fputcsv($stream, $row, ';');
-
-          foreach ($con->query($sql) as $row) {
-            if ($row['full_name'] == ' ') {
-              $row['full_name'] = '--';
-            }
-            if ($row['city'] == null) {
-              $row['city'] = '--';
-            }
-            $zone_pastors[] = $row;
-            fputcsv($stream, $row, ';');
-
-          }
-          
-          rewind($stream);
-
-          $response = $response->withHeader('Content-Type', 'text/csv');
-          $response = $response->withHeader('Content-Disposition', 'attachment; filename="zone_pastors_list.csv"');
-
-          return $response->withBody(new \Slim\Http\Stream($stream));
-
-        } else if ($type_report == 'pdf'){
-
-          // create new PDF document
-          $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
-
-          // set document information
-          $pdf->SetCreator('PDF');
-          $pdf->SetAuthor('C+');
-          $pdf->SetTitle('Zone Pastors List');
-          $pdf->SetSubject('Zone Pastors List');
-          $pdf->SetKeywords('');
-
-          // set default header data
-          $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
-          $pdf->setFooterData(array(0,64,0), array(0,64,128));
-
-          // set header and footer fonts
-          $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
-          $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
-
-          // set default monospaced font
-          $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
-
-          // set margins
-          $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
-          $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
-          $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
-
-          // set auto page breaks
-          $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
-
-          // set image scale factor
-          $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
-
-          // set default font subsetting mode
-          $pdf->setFontSubsetting(true);
-
-          // Set font
-          $pdf->SetFont('helvetica', '', 12, '', true);
-
-          // Add a page
-          $pdf->AddPage();
-
-          // Set some content to print
-          $html ='
-          <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>City:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>Zone Pastors List</b><br>Exported: ' .$final_date. '</p>
-          <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
-          <th width= "160" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>ZONE PASTOR</b></th>
-          <th  width= "90" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>ZONE</b></th>
-          <th width= "125" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>CITY</b></th>
-          <th width="100" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>SUPERVISORS</b></th>
-          <th width="75" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>LEADERS</b></th>
-          <th width="80"style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>MEMBERS</b></th></tr>';
-
-          foreach ($con->query($sql) as $row) {
-            if ($row['full_name'] == ' ') {
-              $row['full_name'] = '--';
-            }
-            if ($row['city'] == null) {
-              $row['city'] = '--';
-            }
-            $html.='
-                <tr>
-                  <td style="height: 30px;">' . $row['full_name'] . '</td>
-                  <td style="height: 30px;">' . $row['zone'] . '</td>
-                  <td style="height: 30px;">' . $row['city'] . '</td>
-                  <td style="height: 30px;">' . $row['supervisors'] . '</td>
-                  <td style="height: 30px;">' . $row['leaders'] . '</td>
-                  <td style="height: 30px;">' . $row['members'] . '</td>
-                </tr>';
-          }
-          $html.='</table>';
-
-          // Print text using writeHTML
-          $pdf->writeHTML($html, true, false, false, false, '');
-
-          // Close and output PDF document
-          $pdf->Output('zone_pastors_list.pdf', 'D');
-
-        }else{
-          return $response->withStatus(422)
-                          ->withHeader('Content-Type', 'application/json')
-                          ->withJson(array('error' => array(
-                                    "message"=>"Type report does not exist",
-                                    "status"=>422)));
-        }
-
-
-      } else{
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "message"=>"Filter active does not exist",
-                    "status"=>422)));
-      }
-
-
-    } else if ($type_member == 'district_pastor'){
-
-      if ($active == '0' || $active == '1') {
-
-        $filter_list = '';
-        
-        if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
-
-          // if cell_id exist, else sector_id
-          $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, IF(user_groups.district_id IS NOT NULL, CONCAT('D',(SELECT groups_districts.district_code FROM groups_districts where groups_districts.id = user_groups.district_id and groups_districts.church_id = $church_id)), '--') as district, user.city, IF(user_groups.district_id != 'NULL', (SELECT count(groups_zones.zone_pastor) from groups_zones where groups_zones.district_id = user_groups.district_id and groups_zones.church_id = $church_id), '0') as zone_pastors, IF(user_groups.district_id != 'NULL', (SELECT count(groups_sectors.supervisor) from groups_sectors, groups_zones where groups_zones.district_id = user_groups.district_id and groups_sectors.zone_id = groups_zones.id and groups_sectors.church_id = $church_id), '0') as supervisors, IF(user_groups.district_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells, groups_sectors, groups_zones where groups_zones.district_id = user_groups.district_id and groups_sectors.zone_id = groups_zones.id and groups_cells.sector_id = groups_sectors.id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.district_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells, groups_sectors, groups_zones WHERE members_cells.church_id = $church_id AND groups_zones.district_id = user_groups.district_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = groups_sectors.id AND groups_sectors.zone_id = groups_zones.id AND groups_cells.church_id = $church_id AND groups_sectors.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 2 AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active";
-          
-
-        } else{ // else role not exist
-
-            return $response->withStatus(422)
-                    ->withHeader('Content-Type', 'application/json')
-                    ->withJson(array('error' => array(
-                        "message"=>"Role does not exist",
-                        "status"=>422)));
-        }
-
-        // DOWNLOADS
-        if ($type_report == 'csv') {
-          
-          $stream = fopen('php://memory', 'w+');
-
-          $row = array('DISTRICT PASTOR', 'DISTRICT','CITY','ZONE PASTORS','SUPERVISORS','LEADERS','MEMBERS');
-          fputcsv($stream, $row, ';');
-
-          foreach ($con->query($sql) as $row) {
-            if ($row['full_name'] == ' ') {
-              $row['full_name'] = '--';
-            }
-            if ($row['city'] == null) {
-              $row['city'] = '--';
-            }
-            $district_pastors[] = $row;
-            fputcsv($stream, $row, ';');
-
-          }
-          
-          rewind($stream);
-
-          $response = $response->withHeader('Content-Type', 'text/csv');
-          $response = $response->withHeader('Content-Disposition', 'attachment; filename="district_pastors_list.csv"');
-
-          return $response->withBody(new \Slim\Http\Stream($stream));
-
-        } else if ($type_report == 'pdf'){
-
-          // create new PDF document
-          $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
-
-          // set document information
-          $pdf->SetCreator('PDF');
-          $pdf->SetAuthor('C+');
-          $pdf->SetTitle('District Pastors List');
-          $pdf->SetSubject('District Pastors List');
-          $pdf->SetKeywords('');
-
-          // set default header data
-          $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
-          $pdf->setFooterData(array(0,64,0), array(0,64,128));
-
-          // set header and footer fonts
-          $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
-          $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
-
-          // set default monospaced font
-          $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
-
-          // set margins
-          $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
-          $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
-          $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
-
-          // set auto page breaks
-          $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
-
-          // set image scale factor
-          $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
-
-          // set default font subsetting mode
-          $pdf->setFontSubsetting(true);
-
-          // Set font
-          $pdf->SetFont('helvetica', '', 12, '', true);
-
-          // Add a page
-          $pdf->AddPage();
-
-          // Set some content to print
-          $html ='
-          <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>City:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>District Pastors List</b><br>Exported: ' .$final_date. '</p>
-          <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
-          <th width= "130" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>DISTRICT PASTOR</b></th>
-          <th  width= "70" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>DISTRICT</b></th>
-          <th width= "105" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>CITY</b></th>
-          <th width="70" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>ZONE PASTORS</b></th>
-          <th width="100" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>SUPERVISORS</b></th>
-          <th width="75" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>LEADERS</b></th>
-          <th width="80"style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>MEMBERS</b></th></tr>';
-
-          foreach ($con->query($sql) as $row) {
-            if ($row['full_name'] == ' ') {
-              $row['full_name'] = '--';
-            }
-            if ($row['city'] == null) {
-              $row['city'] = '--';
-            }
-            $html.='
-                <tr>
-                  <td style="height: 30px;">' . $row['full_name'] . '</td>
-                  <td style="height: 30px;">' . $row['district'] . '</td>
-                  <td style="height: 30px;">' . $row['city'] . '</td>
-                  <td style="height: 30px;">' . $row['zone_pastors'] . '</td>
-                  <td style="height: 30px;">' . $row['supervisors'] . '</td>
-                  <td style="height: 30px;">' . $row['leaders'] . '</td>
-                  <td style="height: 30px;">' . $row['members'] . '</td>
-                </tr>';
-          }
-          $html.='</table>';
-
-          // Print text using writeHTML
-          $pdf->writeHTML($html, true, false, false, false, '');
-
-          // Close and output PDF document
-          $pdf->Output('district_pastors_list.pdf', 'D');
-
-        }else{
-          return $response->withStatus(422)
-                          ->withHeader('Content-Type', 'application/json')
-                          ->withJson(array('error' => array(
-                                    "message"=>"Type report does not exist",
-                                    "status"=>422)));
-        }
-
-
-      } else{
-        return $response->withStatus(422)
-                ->withHeader('Content-Type', 'application/json')
-                ->withJson(array('error' => array(
-                    "message"=>"Filter active does not exist",
-                    "status"=>422)));
-      }
-
-
-    } else{
-      return $response->withStatus(422)
-              ->withHeader('Content-Type', 'application/json')
-              ->withJson(array('error' => array(
-                    "message"=>"Type member does not exist",
-                    "status"=>422)));
-    }
-
-  }else{
-    return $response->withStatus(422)
-            ->withHeader('Content-Type', 'application/json')
-            ->withJson(array('error' => array(
-                "message"=>"User with this role does not exist",
-                "status"=>422)));
-  }
-
-
- }
- catch(\Exception $ex){
-   return $response->withJson(array('error' => array(
-                "message"=> $ex->getMessage(),
-                "status"=>422)),422);
- }
-
-});
-
-
-$app->post('/download/report', function ($request,$response) {
-
-  try{
-     $con = $this->db;
-     $report_id = $request->getParam('report_id');
-     $cell_id = $request->getParam('cell_id');
-
-     if(empty($cell_id)){
-       return $response->withStatus(500)
-               ->withHeader('Content-Type', 'application/json')
-               ->withJson(array('error' => array(
-                 "message"=>"Missing parameter: cell_id",
-                 "status"=>500)));
-     } else if(empty($report_id)){
-       return $response->withStatus(500)
-               ->withHeader('Content-Type', 'application/json')
-               ->withJson(array('error' => array(
-                 "message"=>"Missing parameter: report_id",
-                 "status"=>500)));
-    }
-
-
-    $pre_ini = $con->prepare("SELECT * FROM reports WHERE id = :report_id AND cell_id = :cell_id",  array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-    $values_ini = array(':report_id' => $report_id,':cell_id' => $cell_id);
-    $pre_ini->execute($values_ini);
-    $result_ini = $pre_ini->fetch();
-
-    if ($result_ini) {
-
-      $pre_i = $con->prepare("SELECT reports.name, reports.creation_date, reports.donations_offering, reports.donations_events, reports.donations_transport, reports.total_member_assistance, reports.total_kids_assistance, reports.total_guest_assistance, reports.total_doctrine, reports.total_celebration, reports.total_salvation, reports.total_baptized, reports.total_schedule_visits, reports.district_code, reports.zone_code, reports.sector_code, reports.cell_code, groups_cells.church_id FROM reports INNER JOIN groups_cells ON reports.cell_id = groups_cells.id WHERE reports.id = :report_id AND reports.cell_id = :cell_id",  array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-      $values_i = array(':report_id' => $report_id,':cell_id' => $cell_id);
-      $pre_i->execute($values_i);
-      $result_i = $pre_i->fetch();
-
-      $church_id = $result_i['church_id'];
-
-      /*obtain church name and city*/
-      $pre_ch = $con->prepare("SELECT *
-                               FROM churches
-                               WHERE id = :church_id", 
-                               array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
-
-      $values_ch = array(':church_id' => $church_id);
-      $pre_ch->execute($values_ch);
-      $result_ch = $pre_ch->fetch();
-
-      $church_name = $result_ch['name'];
-      $church_city = $result_ch['city'];
-
-      $final_date = date("Y-m-d H:i");
-
-      /*obtain cell codes*/
-      if ($result_i['district_code'] && $result_i['zone_code'] && $result_i['sector_code'] && $result_i['cell_code']) {
-        $final_cell = 'D'. $result_i['district_code'] . ' Z'. $result_i['zone_code'] . ' S'. $result_i['sector_code'] . ' C'. $result_i['cell_code'] ;
-      } else if ($result_i['zone_code'] && $result_i['sector_code'] && $result_i['cell_code']) {
-        $final_cell = ' Z'. $result_i['zone_code'] . ' S'. $result_i['sector_code'] . ' C'. $result_i['cell_code'] ;
-      } else if ($result_i['sector_code'] && $result_i['cell_code']) {
-        $final_cell = ' S'. $result_i['sector_code'] . ' C'. $result_i['cell_code'] ;
-      } else if ($result_i['cell_code']) {
-        $final_cell = ' C'. $result_i['cell_code'] ;
-      }
-
-      // obtain year, quarterly, week
-      $exp = explode("Q", $result_i['name']);
-      $year = $exp[0];
-      $exp2 = explode("W", $exp[1]);
-      $quar = $exp2[0];
-      $week = $exp2[1];
-
-      // Obtain totals in report
-      $cell_at = $result_i['total_member_assistance'] + $result_i['total_kids_assistance'] + $result_i['total_guest_assistance'];
-      $church_at = $result_i['total_doctrine'] + $result_i['total_celebration'];
-      $performance = $result_i['total_salvation'] + $result_i['total_baptized'] + $result_i['total_schedule_visits'];
-      $donations = number_format($result_i['donations_offering'] + $result_i['donations_transport'] + $result_i['donations_events'],2);
-
-
-      /* Create new PDF document */
-      $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
-
-      // set document information
-      $pdf->SetCreator('PDF');
-      $pdf->SetAuthor('C+');
-      $pdf->SetTitle('Detail Report');
-      $pdf->SetSubject('Detail Report');
-      $pdf->SetKeywords('');
-
-      // set default header data
-      $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
-      $pdf->setFooterData(array(0,64,0), array(0,64,128));
-
-      // set header and footer fonts
-      $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
-      $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
-
-      // set default monospaced font
-      $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
-
-      // set margins
-      $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
-      $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
-      $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
-
-      // set auto page breaks
-      $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
-
-      // set image scale factor
-      $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
-
-      // set default font subsetting mode
-      $pdf->setFontSubsetting(true);
-
-      // Set font
-      $pdf->SetFont('helvetica', '', 12, '', true);
-
-      // Add a page
-      $pdf->AddPage();
-
-      // Set some content to print
-      $html ='
-      <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>City:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>Report '. $result_i['name'] .' - '. $final_cell .'</b><br>Exported: ' .$final_date. '</p>
-      <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
-      <th width="35%" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>Details</b></th>
-      <th width="64%" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"></th></tr>
-      <tr>
-        <td style="height: 30px;"><b>Cell ID: </b>'.$final_cell.'</td>
-        <td style="height: 30px;"><b>Year: </b>'.$year.'</td>
-      </tr>
-      <tr>
-        <td style="height: 30px;"><b>Created: </b>'.$result_i['creation_date'].'</td>
-        <td style="height: 30px;"><b>Quarterly: </b>'.$quar.'</td>
-      </tr>
-      <tr>
-        <td style="height: 30px;"></td>
-        <td style="height: 30px;"><b>Week: </b>'.$week.'</td>
-      </tr></table><p></p>
-      <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
-      <th width="24%" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>Cell attendance: '.$cell_at.'</b></th>
-      <th width="26%" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>Church attendance: '.$church_at.'</b></th>
-      <th width="24%" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>Performance: '.$performance.'</b></th>
-      <th width="25%" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>Donations: $'.$donations.'</b></th></tr>
-      <tr>
-        <td style="height: 30px;"><b>Members: </b>'.$result_i['total_member_assistance'].'</td>
-        <td style="height: 30px;"><b>Doctrine: </b>'.$result_i['total_doctrine'].'</td>
-        <td style="height: 30px;"><b>Salvations: </b>'.$result_i['total_salvation'].'</td>
-        <td style="height: 30px;"><b>Oferring: $</b>'.$result_i['donations_offering'].'</td>
-      </tr>
-      <tr>
-        <td style="height: 30px;"><b>Kids: </b>'.$result_i['total_kids_assistance'].'</td>
-        <td style="height: 30px;"><b>Celebration: </b>'.$result_i['total_celebration'].'</td>
-        <td style="height: 30px;"><b>Baptized: </b>'.$result_i['total_baptized'].'</td>
-        <td style="height: 30px;"><b>Transport: $</b>'.$result_i['donations_transport'].'</td>
-      </tr>
-      <tr>
-        <td style="height: 30px;"><b>Guest: </b>'.$result_i['total_guest_assistance'].'</td>
-        <td style="height: 30px;"></td>
-        <td style="height: 30px;"><b>Schedule visits: </b>'.$result_i['total_schedule_visits'].'</td>
-        <td style="height: 30px;"><b>Events: $</b>'.$result_i['donations_events'].'</td>
-      </tr>
-      </table>';
-
-      // Print text using writeHTML
-      $pdf->writeHTML($html, true, false, false, false, '');
-
-      // Close and output PDF document
-      $pdf->Output('Report '.$result_i['name'] .'.pdf', 'D');
-
-
-    }else{
-      return $response->withStatus(422)
-              ->withHeader('Content-Type', 'application/json')
-              ->withJson(array('error' => array(
-                  "message"=>"Report does not exist in this cell",
-                  "status"=>422)));
-    }
-
-
- }
- catch(\Exception $ex){
-   return $response->withJson(array('error' => array(
-                "message"=> $ex->getMessage(),
-                "status"=>422)),422);
- }
-
-});
-
-
 $app->post('/download/ranking', function ($request,$response) {
 
   try{
@@ -56468,54 +51505,54 @@ $app->post('/general/temporary-invitation-leader', function ($request,$response)
 
     // All fields are required
     if(empty($church_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Id de iglesia",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($zone_code)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Código de zona",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($sector_code)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Código de sector",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($cell_code)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Código de célula",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($name)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Nombre",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($last_name)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Apellido",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($email)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Email",
-                "status"=>500)));
+                "status"=>422)));
     }
 
     /************************** VALIDATIONS **************************/
@@ -56689,7 +51726,7 @@ $app->post('/general/temporary-invitation-leader', function ($request,$response)
     }
 
     // exelerate_id
-    $exe = rand(10000, 99999);
+    // $exe = rand(10000, 99999);
 
     // token and code
     $token_c = password_hash(microtime(), PASSWORD_BCRYPT);
@@ -56702,7 +51739,7 @@ $app->post('/general/temporary-invitation-leader', function ($request,$response)
     $guest_since = date("Y-m-d");
 
     // create leader
-    $pre_cell2 = $con->prepare("INSERT INTO user (`id`, `church_id`, `token`, `first_name`, `last_name`, `email`, `password`, `phone`, `address`, `city`, `gender`, `birth_date`, `marital_status`, `married_since`, `guest_since`, `member_since`, `profile_picture`, `rol`, `exelerate_id`, `verify_code`, `verified_account`,`status`, `newsletter`, `review_terms`, `remember_me`, `created_at`, `updated_at`) VALUES (NULL, :church_id, '$token_c', :name, :last_name, :email, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'5','$exe', '$code_c', '0' ,'0', '1' , '0', '0', '$today', '$today')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+    $pre_cell2 = $con->prepare("INSERT INTO user (`id`, `church_id`, `token`, `first_name`, `last_name`, `email`, `password`, `phone`, `address`, `latitude`, `longitude`, `latitude_delta`, `longitude_delta`,`postal_code`, `city`, `gender`, `birth_date`, `marital_status`, `married_since`, `guest_since`, `member_since`, `profile_picture`, `rol`, `exelerate_id`, `verify_code`, `verified_account`,`status`, `newsletter`, `review_terms`, `remember_me`,`is_complete`, `created_at`, `updated_at`) VALUES (NULL, :church_id, '$token_c', :name, :last_name, :email, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'5',NULL, '$code_c', '0' ,'0', '1' , '0', '0','0', '$today', '$today')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
     $values_cell2 = array(
       ':email' => $email,
@@ -56753,9 +51790,7 @@ $app->post('/general/temporary-invitation-leader', function ($request,$response)
       /************ Actions when the cell is new ************/
 
       // You have to get the id when the new cell is created (this creation process is waiting)
-      $pre_em = $con->prepare("SELECT *
-                               FROM reports
-                               WHERE cell_id = :cell_id", 
+      $pre_em = $con->prepare("SELECT * FROM reports WHERE cell_id = :cell_id ORDER BY creation_date DESC LIMIT 1", 
                                array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
       $values_em = array(':cell_id' => $cell_id);
@@ -56772,18 +51807,18 @@ $app->post('/general/temporary-invitation-leader', function ($request,$response)
 
         if($month < 4){
           $quarter = "1";
-        } elseif($month > 3 && $month <7){
+        } else if($month > 3 && $month <7){
           $quarter = "2";
-        } elseif($month >6 && $month < 10){
+        } else if($month >6 && $month < 10){
           $quarter = "3";
-        } elseif($month >9){
+        } else if($month >9){
           $quarter = "4";
         }
 
         $currentWeekNumber = date('W');
 
         $fweek = '0';
-        $fweek = $currentWeekNumber;
+        $fweek = intval($currentWeekNumber);
 
         if($currentWeekNumber > '13'){
           if ($currentWeekNumber == '14') {
@@ -56883,32 +51918,49 @@ $app->post('/general/temporary-invitation-leader', function ($request,$response)
 
         $reportId = $con->lastInsertId();
 
-      }
+        // add leader to reports detail
+        if (!empty($leader_created)) {
+            $create_detail_lead = $con->prepare("INSERT INTO reports_details (`cell_group`, `doctrine`, `celebration`,`salvations`,`baptized`,`scheduled_visits`,`report_id`,`member_id`,`user_id`,`assigned`,`created_at`, `updated_at`) VALUES ('0', '0','0','0','0','0',:reportId,NULL,:leader_created,'0', '$today', '$today')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_lead = array(
+                ':reportId' => $reportId,
+                ':leader_created' => $leader_created
+            );
+        
+            $result_lead = $create_detail_lead->execute($values_lead);
+        }
+
+        // add reports details (members)
+        $sql_members = "SELECT * FROM members_cells WHERE cell_id = $cell_id AND (role = 1 OR role = 2) AND active = 1";
+
+        foreach ($con->query($sql_members) as $row) {
+
+          $member_id = $row["id"];
+
+          $create_detailm = $con->prepare("INSERT INTO reports_details (`cell_group`, `doctrine`, `celebration`,`salvations`,`baptized`,`scheduled_visits`,`report_id`,`member_id`,`user_id`,`assigned`,`created_at`, `updated_at`) VALUES ('0', '0','0','0','0','0',:reportId,:member_id,NULL,'0', '$today', '$today')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_m = array(
+              ':reportId' => $reportId,
+              ':member_id' => $member_id
+          );
+          
+          $result_m = $create_detailm->execute($values_m);
+        }
 
 
-      // Verify if the last report of the cell has saved the field created_by
-      $pre_lastr = $con->prepare("SELECT *
-                               FROM reports
-                               WHERE cell_id = :cell_id ORDER BY id DESC LIMIT 1", 
-                               array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+      }else{
+        // Update report
+        $report_id = $result_em['id'];
 
-      $values_lastr = array(':cell_id' => $cell_id);
-      $pre_lastr->execute($values_lastr);
-      $result_lastr = $pre_lastr->fetch();
-
-      if (empty($result_lastr['created_by'])) {
-
-        $updater = $con->prepare("UPDATE reports SET created_by = :created_by
-                               WHERE id = :report_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+        $updater = $con->prepare("UPDATE reports SET created_by = :created_by WHERE id = :report_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
         $values_updater = array(
-          ':created_by' => $leader_created,
-          ':report_id' => $result_lastr['id']
+          ':report_id' => $report_id,
+          ':created_by' => $leader_created
           );
 
         $res_updater = $updater->execute($values_updater);
       }
-
 
     }
 
@@ -56916,6 +51968,11 @@ $app->post('/general/temporary-invitation-leader', function ($request,$response)
     if ($result_cell2 && $result_cell3 && $result_us && $result_invite) {
 
         $subject = "Invitación de Líder";
+
+        $type = 2;
+        $host = $app->host;
+        $password = null;
+        $church_id = null;
 
         $bodyMail = "
         <html>
@@ -56948,11 +52005,11 @@ $app->post('/general/temporary-invitation-leader', function ($request,$response)
         <p>Hola, $name</p>
         <p>Tienes una invitación disponible para unirte a C+, una app designada para el manejo de tu grupo celular D$district_code Z$zone_code S$sector_code C$cell_code.</p>
         <p class='part'>Para poder ser parte solamente tienes que darle click al siguiente botón y completar tus datos de registro.</p>
-        <p class='parag'><a class='invite' href='$app->host/invitation/?token=$token_c' target='_blank'>Aceptar invitación</a></p>
+        <p class='parag'><a class='invite' href='$host/invitation/?token=$token_c' target='_blank'>Aceptar invitación</a></p>
         <p class='final'>Con amor,<br>C+ Team.</p>
         </body></html>";
 
-        if(sendEmail($bodyMail,$email,$subject)){
+        if(sendEmail($bodyMail,$email,$subject,$name,$password,$host,$church_id,$type)){
           return $response->withStatus(200)
                   ->withHeader('Content-Type', 'application/json')
                   ->withJson(array('response' => array('message' => 'Invitación enviada', 'leader_id' => $leader_created, 'name' => $name, 'last_name' => $last_name,'district_code' =>$district_code,'zone_code' =>$zone_code,'sector_code' =>$sector_code,'cell_code' =>$cell_code)));
@@ -56984,7 +52041,6 @@ $app->post('/general/temporary-invitation-leader', function ($request,$response)
 
 });
 
-
 $app->post('/general/temporary-invitation', function ($request,$response) use ($app) {
 
   try{
@@ -57003,54 +52059,54 @@ $app->post('/general/temporary-invitation', function ($request,$response) use ($
 
     // All fields are required
     if(empty($church_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Id de iglesia",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($zone_code)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Código de zona",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($sector_code)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Código de sector",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($cell_code)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Código de célula",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($name)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Nombre",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($last_name)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Apellido",
-                "status"=>500)));
+                "status"=>422)));
     } else if (empty($email)) {
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: Email",
-                "status"=>500)));
+                "status"=>422)));
     }
 
     /************************** VALIDATIONS **************************/
@@ -57224,7 +52280,7 @@ $app->post('/general/temporary-invitation', function ($request,$response) use ($
     }
 
     // exelerate_id
-    $exe = rand(10000, 99999);
+    // $exe = rand(10000, 99999);
 
     // token and code
     $token_c = password_hash(microtime(), PASSWORD_BCRYPT);
@@ -57237,7 +52293,7 @@ $app->post('/general/temporary-invitation', function ($request,$response) use ($
     $guest_since = date("Y-m-d");
 
     // create leader
-    $pre_cell2 = $con->prepare("INSERT INTO user (`id`, `church_id`, `token`, `first_name`, `last_name`, `email`, `password`, `phone`, `address`, `city`, `gender`, `birth_date`, `marital_status`, `married_since`, `guest_since`, `member_since`, `profile_picture`, `rol`, `exelerate_id`, `verify_code`, `verified_account`,`status`, `newsletter`, `review_terms`, `remember_me`, `created_at`, `updated_at`) VALUES (NULL, :church_id, '$token_c', :name, :last_name, :email, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'5','$exe', '$code_c', '0' ,'0', '1' , '0', '0', '$today', '$today')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+    $pre_cell2 = $con->prepare("INSERT INTO user (`id`, `church_id`, `token`, `first_name`, `last_name`, `email`, `password`, `phone`, `address`, `city`, `gender`, `birth_date`, `marital_status`, `married_since`, `guest_since`, `member_since`, `profile_picture`, `rol`, `exelerate_id`, `verify_code`, `verified_account`,`status`, `newsletter`, `review_terms`, `remember_me`, `created_at`, `updated_at`) VALUES (NULL, :church_id, '$token_c', :name, :last_name, :email, NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'5',NULL, '$code_c', '0' ,'0', '1' , '0', '0', '$today', '$today')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
     $values_cell2 = array(
       ':email' => $email,
@@ -57288,6 +52344,10 @@ $app->post('/general/temporary-invitation', function ($request,$response) use ($
     if ($result_cell2 && $result_cell3 && $result_us && $result_invite) {
 
         $subject = "Invitación de Líder";
+        $type = 3;
+        $host = $app->host;
+        $password = null;
+        $church_id = null;
 
         $bodyMail = "
         <html>
@@ -57320,11 +52380,11 @@ $app->post('/general/temporary-invitation', function ($request,$response) use ($
         <p>Hola, $name</p>
         <p>Tienes una invitación disponible para unirte a C+, una app designada para el manejo de tu grupo celular D$district_code Z$zone_code S$sector_code C$cell_code.</p>
         <p class='part'>Para poder ser parte solamente tienes que darle click al siguiente botón y completar tus datos de registro.</p>
-        <p class='parag'><a class='invite' href='$app->host/invitation/?token=$token_c' target='_blank'>Aceptar invitación</a></p>
+        <p class='parag'><a class='invite' href='$host/invitation/?token=$token_c' target='_blank'>Aceptar invitación</a></p>
         <p class='final'>Con amor,<br>C+ Team.</p>
         </body></html>";
 
-        if(sendEmail($bodyMail,$email,$subject)){
+        if(sendEmail($bodyMail,$email,$subject,$name,$password,$host,$church_id,$type)){
           return $response->withStatus(200)
                   ->withHeader('Content-Type', 'application/json')
                   ->withJson(array('response' => array('message' => 'Invitación enviada', 'leader_id' => $leader_created, 'name' => $name, 'last_name' => $last_name,'district_code' =>$district_code,'zone_code' =>$zone_code,'sector_code' =>$sector_code,'cell_code' =>$cell_code)));
@@ -57368,12 +52428,12 @@ $app->post('/general/validate-invitation', function ($request,$response) {
     $token = $request->getParam('token');
 
     if(empty($token)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: token",
-                "status"=>500)));
+                "status"=>422)));
     }
 
     // obatin invitations
@@ -57480,12 +52540,12 @@ $app->get('/general/validate-leader-register', function ($request,$response) {
     $password = $request->getParam('password');
 
     if(empty($email) || empty($password)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Todos los campos son requeridos.",
-                "status"=>500)));
+                "status"=>422)));
     }
 
     if ((strlen($password) < '8') || (!preg_match("#[0-9]+#",$password)) || !preg_match("#[A-Z]+#",$password)) {
@@ -57529,8 +52589,6 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
     $meets = $request->getParam('meets');
     $meets_time = $request->getParam('meets_time');
     $address = $request->getParam('address');
-    $latitude = $request->getParam('latitude');
-    $longitude = $request->getParam('longitude');
     $zip_code = $request->getParam('zip_code');
     $city = $request->getParam('city');
     $phone_number = $request->getParam('phone_number');
@@ -57540,96 +52598,96 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
     $valid_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$since);
 
     if(empty($token)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: token",
-                "status"=>500)));
+                "status"=>422)));
 
     } else if(empty($email)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: email",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: correo electrónico",
+                "status"=>422)));
     } else if(empty($password)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: password",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: contraseña",
+                "status"=>422)));
     } else if(empty($church_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: church_id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id de iglesia",
+                "status"=>422)));
     }else if(empty($cell_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: cell_id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id de célula",
+                "status"=>422)));
     }else if(empty($meets)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: meets",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: dia de reunión",
+                "status"=>422)));
     }else if(empty($meets_time)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: meets_time",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: hora de reunión",
+                "status"=>422)));
     }else if(empty($address)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: address",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: dirección",
+                "status"=>422)));
     }else if(empty($zip_code)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: zip_code",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: código postal",
+                "status"=>422)));
     }else if(empty($city)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: city",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: ciudad",
+                "status"=>422)));
     }else if(empty($phone_number)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: phone_number",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: teléfono",
+                "status"=>422)));
     }else if(empty($since)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: since",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: fecha de inicio",
+                "status"=>422)));
     }else if(!$valid_date){
-        return $response->withStatus(500)
+        return $response->withStatus(422)
                 ->withHeader('Content-Type', 'application/json')
                 ->withJson(array('error' => array(
                   "message"=>"Fecha de inicio inválida",
-                  "status"=>500)));
+                  "status"=>422)));
     }
 
     // Validations leader and cell
@@ -57652,13 +52710,16 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
               "status"=>422)));
     }
 
+    // user id
+    $user_id = $result['id'];
+
     // verify if cell exists
     $pre_cell = $con->prepare("SELECT *
                              FROM groups_cells
-                             WHERE id = :cell_id", 
+                             WHERE id = :cell_id AND leader = :user_id", 
                              array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
-    $values_cell = array(':cell_id' => $cell_id);
+    $values_cell = array(':cell_id' => $cell_id, ':user_id' => $user_id);
     $pre_cell->execute($values_cell);
     $result_cell = $pre_cell->fetch();
 
@@ -57674,7 +52735,6 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
 
 
     $directory = $this->get('upload_directory');
-    $user_id = $result['id'];
     $name = $result['first_name'];
     $date_g = date("Y-m-d");
     $today = date("Y-m-d H:i:s");
@@ -57721,47 +52781,56 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
 
     }
 
-    // if ($uploadedFiles) {
+    // Obtain latitude and longitude of group cell
+    $final_ad = urlencode($address);
+    $final_city = urlencode($city);
+    $geo = $final_ad . ',+' . $final_city;
 
-    // handle single input with single file upload
-    //   $uploadedFile = $uploadedFiles['image'];
+    $latitude = null;
+    $longitude = null;
+    $latitude_delta = null;
+    $longitude_delta = null;
 
-    //   if ($uploadedFile->getError() === UPLOAD_ERR_OK) {
+    $url = "https://maps.googleapis.com/maps/api/geocode/json?address=$geo&key=AIzaSyBF-rxaBu86zHTWlFMketjgJaftZ3HR9YU";
+    
+    $ch = curl_init();
+    
+    curl_setopt($ch,CURLOPT_URL, $url);
+    curl_setopt($ch,CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+    
+    $result_map = curl_exec($ch);
 
-    //     $user_dir = $app->user_directory;
-    //     $filename = moveUploadedFile($user_dir, $uploadedFile);
+    curl_close($ch);
 
-    //     $url_p = $app->user_url;
+    if ($result_map) {
+      $data = json_decode($result_map);
 
-    //     $url_final = $url_p . DIRECTORY_SEPARATOR . $filename;
+      if($data->status == "OK"){
+          $lat = $data->results[0]->geometry->location->lat;
+          $lng = $data->results[0]->geometry->location->lng;
 
+          // latitude delta
+          $lat_nth = $data->results[0]->geometry->viewport->northeast->lat;
+          $lng_sth = $data->results[0]->geometry->viewport->southwest->lat;
+          $diff = $lat_nth - $lng_sth;
 
-    //     $pre_user2 = $con->prepare("UPDATE user SET profile_picture = :profile,updated_at = :today
-    //                            WHERE id = :user_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          // longitude delta
+          $lat_nth2 = $data->results[0]->geometry->viewport->northeast->lng;
+          $lng_sth2 = $data->results[0]->geometry->viewport->southwest->lng;
+          $diff2 = $lat_nth2 - $lng_sth2;
 
-    //     $values_user2 = array(
-    //       ':profile' => $url_final,
-    //       ':user_id' => $user_id,
-    //       ':today' => $today
-    //       );
+          // adding values
+          $latitude = $lat;
+          $longitude = $lng;
+          $latitude_delta = $diff;
+          $longitude_delta = $diff2;
+      }
 
-    //     $result_user2 = $pre_user2->execute($values_user2);
-
-
-    //   }else{
-    //     return $response->withStatus(422)
-    //           ->withHeader('Content-Type', 'application/json')
-    //           ->withJson(array('error' => array(
-    //             "type"=>"size_image",
-    //             "success"=>"false",
-    //             "message"=>"Verifique el tamaño de su imagen de perfil.",
-    //             "status"=>422)));
-    //   }
-
-    // }
+    }
 
     // update group cell
-    $update_cell = $con->prepare("UPDATE groups_cells SET is_complete = 1, meets_on = :meets, meets_time = :meets_time, address = :address,zip_code = :zip_code, city = :city, phone = :phone_number, start_date = :since, updated_at = :today WHERE id = :cell_id AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+    $update_cell = $con->prepare("UPDATE groups_cells SET is_complete = 1, meets_on = :meets, meets_time = :meets_time, address = :address,latitude = :latitude,longitude = :longitude,latitude_delta = :latitude_delta,longitude_delta = :longitude_delta,zip_code = :zip_code, city = :city, phone = :phone_number, start_date = :since, updated_at = :today WHERE id = :cell_id AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
     $values_update = array(
       ':cell_id' => $cell_id,
@@ -57769,6 +52838,10 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
       ':meets' => $meets,
       ':meets_time' => $meets_time,
       ':address' => $address,
+      ':latitude' => $latitude,
+      ':longitude' => $longitude,
+      ':latitude_delta' => $latitude_delta,
+      ':longitude_delta' => $longitude_delta,
       ':zip_code' => $zip_code,
       ':city' => $city,
       ':phone_number' => $phone_number,
@@ -57813,6 +52886,9 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
 
       $subject = "Bienvenido a C+";
 
+      $type = 4;
+      $host = $app->host;
+
       $bodyMail = "
       <html>
       <head>
@@ -57823,7 +52899,7 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
         }
         .invite{
           background-color: rgb(78, 206, 61);
-          color: #fff;
+          color: #fff !important;
           padding: 10px;
           border-radius: 5px;
           text-decoration: none;
@@ -57845,11 +52921,11 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
       <p>Bienvenido a C+ The easy way to expand. A continuación detallamos tus credenciales para ingresar a la plataforma.</p>
       <p>Correo: $email <br> Contraseña: $password</p>
       <p class='part'>No olvides guardar este correo para tener a la mano tus credenciales, si olvidas tu contraseña podrás generar una nueva en “Olvidé mi contraseña” dentro de la plataforma.</p>
-      <p class='parag'><a class='invite' href='$app->host/?type=login&church_id=$church_id' target='_blank'>Iniciar sesión</a></p>
+      <p class='parag'><a class='invite' href='$host/?type=login&church_id=$church_id' target='_blank'>Iniciar sesión</a></p>
       <p class='final'>Con amor,<br>C+ Team.</p>
       </body></html>";
 
-      if(sendEmail($bodyMail,$email,$subject)){
+      if(sendEmail($bodyMail,$email,$subject,$name,$password,$host,$church_id,$type)){
 
         $final_res = array('message' => 'Su registro se ha guardado con éxito.',
                            'leader_id' => $result['id'],
@@ -57878,7 +52954,6 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
                 ->withJson(array('error' => array(
                   "type"=>"invitation_not_sent",
                   "message"=>"Su registro fue guardado, pero el correo de bienvenida no pudo ser enviado.",
-                  // "Mailer Error:"=>$mail_c->ErrorInfo,
                   "status"=>422)));
       }
 
@@ -57899,7 +52974,317 @@ $app->post('/general/leader-register', function ($request,$response) use ($app) 
 
 });
 
+
+$app->get('/general/get-cities', function ($request,$response) {
+
+  try{
+
+    // $list = array('Adelanto', 'Agoura Hills', 'Alameda', 'Albany', 'Alhambra', 'Aliso Viejo', 'Alturas', 'Amador City', 'American Canyon', 'Anaheim', 'Anderson', 'Angels Camp', 'Antioch', 'Apple Valley', 'Arcadia', 'Arcata', 'Arroyo Grande', 'Artesia', 'Arvin', 'Atascadero', 'Atherton', 'Atwater', 'Auburn', 'Avalon', 'Avenal', 'Azusa', 'Bakersfield', 'Baldwin Park', 'Banning', 'Barstow', 'Beaumont', 'Bell', 'Bell Gardens', 'Bellflower', 'Belmont', 'Belvedere', 'Benicia', 'Berkeley', 'Beverly Hills', 'Big Bear Lake', 'Biggs', 'Bishop', 'Blue Lake', 'Blythe', 'Bradbury', 'Brawley', 'Brea', 'Brentwood', 'Brisbane', 'Buellton', 'Buena Park', 'Burbank', 'Burlingame', 'Calabasas', 'Calexico', 'California City', 'Calimesa', 'Calipatria', 'Calistoga', 'Camarillo', 'Campbell', 'Canyon Lake', 'Capitola', 'Carlsbad', 'Carmel-by-the-Sea', 'Carpintería', 'Carson', 'Cathedral City', 'Ceres', 'Cerritos', 'Chico', 'Chino', 'Chino Hills', 'Chowchilla', 'Chula Vista', 'Citrus Heights', 'Claremont', 'Clayton', 'Clearlake', 'Cloverdale', 'Clovis', 'Coachella', 'Coalinga', 'Colfax', 'Colma', 'Colton', 'Colusa', 'Commerce', 'Compton', 'Concord', 'Corcoran', 'Corning', 'Corona', 'Coronado', 'Corte Madera', 'Costa Mesa', 'Cotati', 'Covina', 'Crescent City', 'Cudahy', 'Culver City', 'Cupertino', 'Cypress', 'Daly City', 'Dana Point', 'Danville', 'Davis', 'Del Mar', 'Del Rey Oaks', 'Delano', 'Desert Hot Springs', 'Diamond Bar', 'Dinuba', 'Dixon', 'Dorris', 'Dos Palos', 'Downey', 'Duarte', 'Dublin', 'Dunsmuir', 'East Palo Alto', 'Eastvale', 'El Cajón', 'El Centro', 'El Cerrito', 'El Monte', 'El Segundo', 'Elk Grove', 'Emeryville', 'Encinitas', 'Escalon', 'Escondido', 'Etna', 'Eureka', 'Exeter', 'Fairfax', 'Fairfield', 'Farmersville', 'Ferndale', 'Fillmore', 'Firebaugh', 'Folsom', 'Fontana', 'Fort Bragg', 'Fort Jones', 'Fortuna', 'Foster City', 'Fountain Valley', 'Fowler', 'Fremont', 'Fresno', 'Fullerton', 'Galt', 'Garden Grove', 'Gardena', 'Gilroy', 'Glendale', 'Glendora', 'Goleta', 'Gonzales', 'Grand Terrace', 'Grass Valley', 'Greenfield', 'Gridley', 'Grover Beach', 'Guadalupe', 'Gustine', 'Half Moon Bay', 'Hanford', 'Hawaiian Gardens', 'Hawthorne', 'Hayward', 'Healdsburg', 'Hemet', 'Hercules', 'Hermosa Beach', 'Hesperia', 'Hidden Hills', 'Highland', 'Hillsborough', 'Hollister', 'Holtville', 'Hughson', 'Huntington Beach', 'Huntington Park', 'Huron', 'Imperial', 'Imperial Beach', 'Indian Wells', 'Indio', 'Industry', 'Inglewood', 'Ione', 'Irvine', 'Irwindale', 'Isleton', 'Jackson', 'Jurupa Valley', 'Kerman', 'King City', 'Kingsburg', 'La Cañada Flintridge', 'La Habra', 'La Habra Heights', 'La Mesa', 'La Mirada', 'La Palma', 'La Puente', 'La Quinta', 'La Verne', 'Lafayette', 'Laguna Beach', 'Laguna Hills', 'Laguna Niguel', 'Laguna Woods', 'Lake Elsinore', 'Lake Forest', 'Lakeport', 'Lakewood', 'Lancaster', 'Larkspur', 'Lathrop', 'Lawndale', 'Lemon Grove', 'Lemoore', 'Lincoln', 'Lindsay', 'Live Oak', 'Livermore', 'Livingston', 'Lodi', 'Loma Linda', 'Lomita', 'Lompoc', 'Long Beach', 'Loomis', 'Los Alamitos', 'Los Altos', 'Los Altos Hills', 'Los Ángeles', 'Los Baños', 'Los Gatos', 'Loyalton', 'Lynwood', 'Madera', 'Malibu', 'Mammoth Lakes', 'Manhattan Beach', 'Manteca', 'Maricopa', 'Marina', 'Martinez', 'Marysville', 'Maywood', 'McFarland', 'Mendota', 'Menifee', 'Menlo Park', 'Merced', 'Mill Valley', 'Millbrae', 'Milpitas', 'Mission Viejo', 'Modesto', 'Monrovia', 'Montague', 'Montclair', 'Monte Sereno', 'Montebello', 'Monterrey', 'Monterey Park', 'Moorpark', 'Moraga', 'Moreno Valley', 'Morgan Hill', 'Morro Bay', 'Mount Shasta', 'Mountain View', 'Murrieta', 'Napa', 'National City', 'Needles', 'Nevada City', 'Newark', 'Newman', 'Newport Beach', 'Norco', 'Norwalk', 'Novato', 'Oakdale', 'Oakland', 'Oakley', 'Oceanside', 'Ojai', 'Ontario', 'Orange', 'Orange Cove', 'Orinda', 'Orland', 'Oroville', 'Oxnard', 'Pacific Grove', 'Pacífica', 'Palm Desert', 'Palm Springs', 'Palmdale', 'Palo Alto', 'Palos Verdes Estates', 'Paradise', 'Paramount', 'Parlier', 'Pasadena', 'Paso Robles', 'Patterson', 'Perriss', 'Petaluma', 'Pico Rivera', 'Piedmont', 'Pinole', 'Pismo Beach', 'Pittsburg', 'Placentia', 'Placerville', 'Pleasant Hill', 'Pleasanton', 'Plymouth', 'Point Arena', 'Pomona', 'Port Hueneme', 'Porterville', 'Portola', 'Portola Valley', 'Poway', 'Rancho Cordova', 'Rancho Cucamonga', 'Rancho Mirage', 'Rancho Palos Verdes', 'Rancho Santa Margarita', 'Red Bluff', 'Redding', 'Redlands', 'Redondo Beach', 'Redwood City', 'Reedley', 'Rialto', 'Richmond', 'Ridgecrest', 'Río Dell', 'Río Vista', 'Ripon', 'Riverbank', 'Riverside', 'Rocklin', 'Rohnert Park', 'Rolling Hills', 'Rolling Hills Estates', 'Rosemead', 'Roseville', 'Ross', 'Sacramento', 'Salinas', 'San Anselmo', 'San Bernardino', 'San Bruno', 'San Carlos', 'San Clemente', 'San Diego', 'San Dimas', 'San Fernando', 'San Francisco', 'San Gabriel', 'San Jacinto', 'San Joaquín', 'San José', 'San Juan Bautista', 'San Juan Capistrano', 'San Leandro', 'San Luis Obispo', 'San Marcos', 'San Marino', 'San Mateo', 'San Pablo', 'San Rafael', 'San Ramón', 'Sand City', 'Sanger', 'Santa Ana', 'Santa Bárbara', 'Santa Clara', 'Santa Clarita', 'Santa Cruz', 'Santa Fe Springs', 'Santa María', 'Santa Mónica', 'Santa Paula', 'Santa Rosa', 'Santee', 'Saratoga', 'Sausalito', 'Scotts Valley', 'Seal Beach', 'Seaside', 'Sebastopol', 'Selma', 'Shafter', 'Shasta Lake', 'Sierra Madre', 'Signal Hill', 'Simi Valley', 'Solana Beach', 'Soledad', 'Solvang', 'Sonora', 'South El Monte', 'South Gate', 'South Lake Tahoe', 'South Pasadena', 'South San Francisco', 'St. Helena', 'Stanton', 'Stockton', 'Suisun City', 'Sunnyvale', 'Susanville', 'Sutter Creek', 'Taft', 'Tehachapi', 'Tehama', 'Temecula', 'Temple City', 'Thousand Oaks', 'Tiburón', 'Torrance', 'Tracy', 'Trinidad', 'Truckee', 'Tulare', 'Tulelake', 'Turlock', 'Tustin', 'Twentynine Palms', 'Ukiah', 'Union City', 'Upland', 'Vacaville', 'Vallejo', 'Ventura', 'Vernon', 'Victorville', 'Villa Park', 'Visalia', 'Vista', 'Walnut', 'Walnut Creek', 'Wasco', 'Waterford', 'Watsonville', 'Weed', 'West Covina', 'West Hollywood', 'West Sacramento', 'Westlake Village', 'Westminster', 'Westmorland', 'Wheatland', 'Whittier', 'Wildomar', 'Williams', 'Willits', 'Willows', 'Winters', 'Woodlake', 'Woodland', 'Yorba Linda', 'Yreka', 'Yuba City', 'Yucaipa');
+    $list = array("Los Angeles", "San Diego", "San Jose", "San Francisco", "Fresno", "Sacramento", "Long Beach", "Oakland", "Bakersfield", "Anaheim", "Santa Ana", "Riverside", "Stockton", "Chula Vista", "Irvine", "Fremont", "San Bernardino", "Modesto", "Fontana", "Oxnard", "Moreno Valley", "Huntington Beach", "Glendale", "Santa Clarita", "Garden Grove", "Oceanside", "Rancho Cucamonga", "Santa Rosa", "Ontario", "Lancaster", "Elk Grove", "Corona", "Palmdale", "Salinas", "Pomona", "Hayward", "Escondido", "Torrance", "Sunnyvale", "Orange", "Fullerton", "Pasadena", "Thousand Oaks", "Visalia", "Simi Valley", "Concord", "Roseville", "Victorville", "Santa Clara", "Vallejo", "Berkeley", "El Monte", "Downey", "Costa Mesa", "Inglewood", "Carlsbad", "San Buenaventura (Ventura)", "Fairfield", "West Covina", "Murrieta", "Richmond", "Norwalk", "Antioch", "Temecula", "Burbank", "Daly City", "Rialto", "Santa Maria", "El Cajon", "San Mateo", "Clovis", "Compton", "Jurupa Valley", "Vista", "South Gate", "Mission Viejo", "Vacaville", "Carson", "Hesperia", "Santa Monica", "Westminster", "Redding", "Santa Barbara", "Chico", "Newport Beach", "San Leandro", "San Marcos", "Whittier", "Hawthorne", "Citrus Heights", "Tracy", "Alhambra", "Livermore", "Buena Park", "Menifee", "Hemet", "Lakewood", "Merced", "Chino", "Indio", "Redwood City", "Lake Forest", "Napa", "Tustin", "Bellflower", "Mountain View", "Chino Hills", "Baldwin Park", "Alameda", "Upland", "San Ramon", "Folsom", "Pleasanton", "Union City", "Perris", "Manteca", "Lynwood", "Apple Valley", "Redlands", "Turlock", "Milpitas", "Redondo Beach", "Rancho Cordova", "Yorba Linda", "Palo Alto", "Davis", "Camarillo", "Walnut Creek", "Pittsburg", "South San Francisco", "Yuba City", "San Clemente", "Laguna Niguel", "Pico Rivera", "Montebello", "Lodi", "Madera", "Santa Cruz", "La Habra", "Encinitas", "Monterey Park", "Tulare", "Cupertino", "Gardena", "National City", "Rocklin", "Petaluma", "Huntington Park", "San Rafael", "La Mesa", "Arcadia", "Fountain Valley", "Diamond Bar", "Woodland", "Santee", "Lake Elsinore", "Porterville", "Paramount", "Eastvale", "Rosemead", "Hanford", "Highland", "Brentwood", "Novato", "Colton", "Cathedral City", "Delano", "Yucaipa", "Watsonville", "Placentia", "Glendora", "Gilroy", "Palm Desert", "Cerritos", "West Sacramento", "Aliso Viejo", "Poway", "La Mirada", "Rancho Santa Margarita", "Cypress", "Dublin", "Covina", "Azusa", "Palm Springs", "San Luis Obispo", "Ceres", "San Jacinto", "Lincoln", "Newark", "Lompoc", "El Centro", "Danville", "Bell Gardens", "Coachella", "Rancho Palos Verdes", "San Bruno", "Rohnert Park", "Brea", "La Puente", "Campbell", "San Gabriel", "Beaumont", "Morgan Hill", "Culver City", "Calexico", "Stanton", "La Quinta", "Pacifica", "Montclair", "Oakley", "Monrovia", "Los Banos", "Martinez");
+
+    return $response->withStatus(200)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('response' => $list));
+
+  }
+  catch(\Exception $ex){
+     return $response->withJson(array('error' => array(
+                  "message"=> $ex->getMessage(),
+                  "status"=>422)),422);
+  }
+
+});
+
 /********************** LOGIN **************************/
+
+$app->post('/login', function ($request,$response) {
+
+  try{
+
+     $con = $this->db; 
+     $email = $request->getParam('email');
+     $password = md5($request->getParam('password'));
+
+     if(empty($email)){
+       return $response->withStatus(422)
+               ->withHeader('Content-Type', 'application/json')
+               ->withJson(array('error' => array(
+                "type"=>"required",
+                 "message"=>"Parámetro faltante: correo electrónico",
+                 "status"=>422)));
+     }  else if(empty($password)){
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                  "type"=>"required",
+                  "message"=>"Parámetro faltante: contraseña",
+                  "status"=>422)));
+    }
+
+    // verify if email exist
+    $pre_em = $con->prepare("SELECT *
+                             FROM user
+                             WHERE email = :email",
+                             array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+    $values_em = array(':email' => $email);
+    $pre_em->execute($values_em);
+    $result_em = $pre_em->fetch();
+
+    if (!$result_em) {
+      return $response->withStatus(422)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('error' => array(
+                  "type"=>"wrong_mail",
+                  "message"=>"¡Ups! el correo es incorrecto.",
+                  "status"=>422)));
+    }
+
+    $church_id = $result_em['church_id'];
+
+    // check if password is correct
+    $pre_pass = $con->prepare("SELECT *
+                             FROM user
+                             WHERE email = :email
+                             AND password = :password", 
+                             array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+    $values_pass = array(':email' => $email, ':password' => $password);
+    $pre_pass->execute($values_pass);
+    $result_pass = $pre_pass->fetch();
+
+    if (!$result_pass) {
+      return $response->withStatus(422)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('error' => array(
+                  "type"=>"wrong_password",
+                  "message"=>"¡Ups! la contraseña es incorrecta.",
+                  "status"=>422)));
+    }
+
+    // check if account is active
+    $sql = "SELECT *
+            FROM `user`
+            WHERE `email` = :email
+            AND `password` = :password AND church_id = :church_id AND status ='1' AND verified_account = '1'";
+    $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+    $values = array(
+      ':email' => $email,
+      ':password' => $password,
+      ':church_id' => $church_id
+      );
+    
+    $result = $pre->execute($values);
+    $result = $pre->fetch();
+
+    if(!$result){
+      return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                          "type"=>"inactive_account",
+                          "message"=>"¡Ups! Su cuenta no se encuentra activa.",
+                          "status"=>422)));
+    }
+
+    $user_i = $result['id'];
+
+    // Roles
+    $user_rol = null;
+    $final_gro = null;
+
+    if ($result['rol'] == '1') {
+      $user_rol = 'Senior Pastor';
+    } else if ($result['rol'] == '2') {
+      $user_rol = 'District Pastor';
+
+      // Select group id and codes
+      $sql_gro = "SELECT district_code, id as district_id FROM groups_districts WHERE district_pastor = :user_id AND church_id = :church_id";
+      $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+      $values_gro = array(
+        ':user_id' => $user_i,
+        ':church_id' => $church_id
+        );
+      
+      $result_gro = $pre_gro->execute($values_gro);
+      $result_gro = $pre_gro->fetch();
+
+      // verify if the user does not have a group assigned
+      if (!$result_gro) {
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "type"=>"not_assigned",
+                    "message"=>"¡Ups! lo siento, no puedes acceder. Parece que ya no estás asignado a ningún Distrito.",
+                    "status"=>422)));
+      }
+
+      $final_gro = array(
+        'district_code' => $result_gro['district_code'],
+        'parent_id' => $result_gro['district_id']
+      );
+
+    } else if ($result['rol'] == '3') {
+      $user_rol = 'Zone Pastor';
+
+      // Select group id and codes
+      $sql_gro = "SELECT zone_code, district_code, id as zone_id, district_id FROM `groups_zones` WHERE `zone_pastor` = :user_id AND church_id = :church_id";
+      $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+      $values_gro = array(
+        ':user_id' => $user_i,
+        ':church_id' => $church_id
+        );
+      
+      $result_gro = $pre_gro->execute($values_gro);
+      $result_gro = $pre_gro->fetch();
+
+      // verify if the user does not have a group assigned
+      if (!$result_gro) {
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "type"=>"not_assigned",
+                    "message"=>"¡Ups! lo siento, no puedes acceder. Parece que ya no estás asignado a ninguna Zona.",
+                    "status"=>422)));
+      }
+
+      $final_gro = array(
+        'parent_id' => $result_gro['zone_id'],
+        'zone_code' => $result_gro['zone_code'],
+        'district_id' => $result_gro['district_id'],
+        'district_code' => $result_gro['district_code']
+      );
+
+    } else if ($result['rol'] == '4') {
+      $user_rol = 'Supervisor';
+
+      // Select group id and codes
+      $sql_gro = "SELECT sector_code, zone_code, district_code, id as sector_id, zone_id, (SELECT district_id from groups_zones WHERE groups_zones.id = groups_sectors.zone_id AND groups_zones.church_id = :church_id) as district_id FROM `groups_sectors` WHERE `supervisor` = :user_id AND church_id = :church_id";
+      $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+      $values_gro = array(
+        ':user_id' => $user_i,
+        ':church_id' => $church_id
+        );
+      
+      $result_gro = $pre_gro->execute($values_gro);
+      $result_gro = $pre_gro->fetch();
+
+      // verify if the user does not have a group assigned
+      if (!$result_gro) {
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "type"=>"not_assigned",
+                    "message"=>"¡Ups! lo siento, no puedes acceder. Parece que ya no estás asignado a ningún Sector.",
+                    "status"=>422)));
+      }
+
+      $final_gro = array(
+        'parent_id' => $result_gro['sector_id'],
+        'sector_code' => $result_gro['sector_code'],
+        'zone_id' => $result_gro['zone_id'],
+        'zone_code' => $result_gro['zone_code'],
+        'district_id' => $result_gro['district_id'],
+        'district_code' => $result_gro['district_code']
+      );
+
+    } else if ($result['rol'] == '5') {
+      $user_rol = 'Leader';
+
+      // Select group id and codes
+      $sql_gro = "SELECT cell_code, sector_code, zone_code, district_code, id as cell_id, sector_id, (SELECT zone_id from groups_sectors WHERE groups_sectors.id = groups_cells.sector_id AND groups_sectors.church_id = :church_id) as zone_id, (SELECT district_id from groups_zones WHERE groups_zones.id = zone_id AND groups_zones.church_id = :church_id) as district_id FROM `groups_cells` WHERE `leader` = :user_id AND church_id = :church_id";
+      $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+      $values_gro = array(
+        ':user_id' => $user_i,
+        ':church_id' => $church_id
+        );
+      
+      $result_gro = $pre_gro->execute($values_gro);
+      $result_gro = $pre_gro->fetch();
+
+      // verify if the user does not have a group assigned
+      if (!$result_gro) {
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "type"=>"not_assigned",
+                    "message"=>"¡Ups! lo siento, no puedes acceder. Parece que ya no estás asignado a ninguna Célula.",
+                    "status"=>422)));
+      }
+
+      $final_gro = array(
+        'parent_id' => $result_gro['cell_id'],
+        'cell_code' => $result_gro['cell_code'],
+        'sector_id' => $result_gro['sector_id'],
+        'sector_code' => $result_gro['sector_code'],
+        'zone_id' => $result_gro['zone_id'],
+        'zone_code' => $result_gro['zone_code'],
+        'district_id' => $result_gro['district_id'],
+        'district_code' => $result_gro['district_code']
+      );
+
+    } else if ($result['rol'] == '6') {
+      $user_rol = 'Administrator';
+    } else if ($result['rol'] == '7') {
+      $user_rol = 'Owner';
+    }
+    
+
+    $church_info = "SELECT name AS church_name
+            FROM churches
+            WHERE id = :church_id";
+    $pre_church  = $con->prepare($church_info, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+    $values_church = array(
+      ':church_id' => $church_id
+      );
+    
+    $result_church = $pre_church->execute($values_church);
+    $result_church = $pre_church->fetch();
+
+    /*steps*/
+    $sql_steps = "SELECT step_id,name,step_date
+            FROM user_steps
+            WHERE user_id = $user_i";
+
+    $steps = null;
+
+    foreach ($con->query($sql_steps) as $row) {
+      $steps[] = $row;
+    }
+
+    // obtain settings and notifications for user
+    $pre_sett = $con->prepare("SELECT reports_mail, reports_mobile,members_mail,members_mobile,
+                              news_mail, news_mobile
+                                 FROM user_settings
+                                 WHERE user_id = :user_i", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+    $values_sett = array(':user_i' => $user_i);
+    $pre_sett->execute($values_sett);
+    $result_sett = $pre_sett->fetch();
+
+    if (!$result_sett) {
+      $result_sett = null;
+    }
+
+    return $response->withStatus(200)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('response' => array('message' => 'Usuario existente', 'user_id' => $result['id'],'church_id' => $result['church_id'], 'first_name' => $result['first_name'], 'last_name' => $result['last_name'], 'email' => $result['email'],'phone' => $result['phone'],'address' => $result['address'],'city' => $result['city'],"gender" => $result['gender'],"birth_date" => $result['birth_date'],"marital_status" => $result['marital_status'],"married_since" => $result['married_since'],"guest_since" => $result['guest_since'],"member_since" => $result['member_since'],'profile_picture' => $result['profile_picture'],'role' => $result['rol'],"user_role" => $user_rol,"is_complete" => $result['is_complete'], 'type_user' => 'member-group',"church_name" => $result_church['church_name'],"group" => $final_gro,"steps" => $steps, "notifications" => $result_sett)));
+        
+
+ }
+ catch(\Exception $ex){
+   return $response->withJson(array('error' => array(
+                "message"=> $ex->getMessage(),
+                "status"=>422)),422);
+ }
+
+});
 
 // verify email exist
 $app->get('/login/validate-email', function ($request,$response) {
@@ -57910,12 +53295,12 @@ $app->get('/login/validate-email', function ($request,$response) {
      $email = $request->getParam('email');
 
      if(empty($email)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                 "type"=>"required",
-                 "message"=>"Parámetro faltante: email",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: correo electrónico",
+                 "status"=>422)));
      }
 
      $valid_email = preg_match("#(^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$)#", $email);
@@ -57974,19 +53359,19 @@ $app->get('/login/validate-password', function ($request,$response) {
      $password = md5($request->getParam('password'));
 
      if(empty($email)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                 "type"=>"required",
-                 "message"=>"Parámetro faltante: email",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: correo electrónico",
+                 "status"=>422)));
      }  else if(empty($password)){
-        return $response->withStatus(500)
+        return $response->withStatus(422)
                 ->withHeader('Content-Type', 'application/json')
                 ->withJson(array('error' => array(
                   "type"=>"required",
-                  "message"=>"Parámetro faltante: password",
-                  "status"=>500)));
+                  "message"=>"Parámetro faltante: contraseña",
+                  "status"=>422)));
     }
     
     $pre_pass = $con->prepare("SELECT *
@@ -58035,12 +53420,12 @@ $app->post('/add-new-password', function ($request,$response) use ($app){
     $password = $request->getParam('password');
 
     if(empty($email) || empty($password)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Todos los campos son requeridos.",
-                "status"=>500)));
+                "status"=>422)));
     }
 
     // if exist user
@@ -58102,6 +53487,9 @@ $app->post('/add-new-password', function ($request,$response) use ($app){
 
     $subject = "Nuevas credenciales";
 
+    $type = 5;
+    $host = $app->host;
+
     $bodyMail = "
     <html>
     <head>
@@ -58112,7 +53500,7 @@ $app->post('/add-new-password', function ($request,$response) use ($app){
       }
       .invite{
         background-color: rgb(78, 206, 61);
-        color: #fff;
+        color: #fff !important;
         padding: 10px;
         border-radius: 5px;
         text-decoration: none;
@@ -58135,23 +53523,22 @@ $app->post('/add-new-password', function ($request,$response) use ($app){
     <p>Acabas de cambiar la contraseña para conectarte a C+. A continuación detallamos tus credenciales para ingresar a la plataforma.</p>
     <p>Correo: $email <br> Contraseña: $password</p>
     <p class='part'>No olvides guardar este correo para tener a la mano tus credenciales, si olvidas tu contraseña podrás generar una nueva en “Olvidé mi contraseña” dentro de la plataforma.</p>
-    <p class='parag'><a class='invite' href='$app->host/?type=login&church_id=$church_id' target='_blank'>Iniciar sesión</a></p>
+    <p class='parag'><a class='invite' href='$host/?type=login&church_id=$church_id' target='_blank'>Iniciar sesión</a></p>
     <p class='final'>Con amor,<br>C+ Team.</p>
     </body></html>";
 
-    if(sendEmail($bodyMail,$email,$subject)){
+    if(sendEmail($bodyMail,$email,$subject,$name,$password,$host,$church_id,$type)){
 
       return $response->withStatus(200)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('response' => 
-                array("message"=>"¡Contraseseña actualizada!", 'email' => $email)));
+                array("message"=>"¡Contraseña actualizada!", 'email' => $email)));
     }else{
       return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"emai_new_password",
                 "message"=>"Su contraseña fue guardada, pero el correo con nuevas credenciales no pudo ser enviado.",
-                // "Mailer Error:"=>$mail_c->ErrorInfo,
                 "status"=>422)));
     }
 
@@ -58180,26 +53567,26 @@ $app->post('/settings/change-email', function ($request,$response) use ($app){
     $email = $request->getParam('email');
 
     if(empty($user_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: user id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id del usuario",
+                "status"=>422)));
     } else if(empty($church_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: church id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id de la iglesia",
+                "status"=>422)));
     } else if(empty($email)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: email",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: correo electrónico",
+                "status"=>422)));
     }
 
     // if exist user
@@ -58279,7 +53666,7 @@ $app->post('/settings/change-email', function ($request,$response) use ($app){
     return $response->withStatus(200)
             ->withHeader('Content-Type', 'application/json')
             ->withJson(array('response' => 
-              array("message"=>"Correo cambiado satisfactoriamente.", 'email' => $email)));
+              array("message"=>"Su correo ha sido cambiado satisfactoriamente.", 'email' => $email)));
 
   } // end try
   catch(\Exception $ex){
@@ -58303,33 +53690,33 @@ $app->post('/settings/notifications', function ($request,$response){
     $active = $request->getParam('active');
 
     if(empty($user_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: user id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id del usuario",
+                "status"=>422)));
     } else if(empty($church_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: church id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id de la iglesia",
+                "status"=>422)));
     } else if(empty($notification_type)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: notification_type",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: tipo de notificación",
+                "status"=>422)));
     } else if(!preg_match("/^[0-1]+$/i", $active)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: active",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: activo",
+                "status"=>422)));
     }
 
     // if exist user
@@ -58396,10 +53783,26 @@ $app->post('/settings/notifications', function ($request,$response){
                       "status"=>422)));
     }
 
+    // obtain settings and notifications for user
+    $pre_sett = $con->prepare("SELECT reports_mail, reports_mobile,members_mail,members_mobile,
+                              news_mail, news_mobile
+                                 FROM user_settings
+                                 WHERE user_id = :user_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+    $values_sett = array(':user_id' => $user_id);
+    $pre_sett->execute($values_sett);
+    $result_sett = $pre_sett->fetch();
+
+    if (!$result_sett) {
+      $result_sett = null;
+    }
+
     return $response->withStatus(200)
             ->withHeader('Content-Type', 'application/json')
             ->withJson(array('response' => 
-              array("message"=>"Opción guardada satisfactoriamente.")));
+              array("message"=>"Opción guardada satisfactoriamente.",
+                    "notifications"=> $result_sett)));
 
 
   } // end try
@@ -58421,29 +53824,29 @@ $app->post('/settings/contact-us', function ($request,$response) {
    $message = $request->getParam('message');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "message"=>"Parámetro faltante: id de usuario",
-               "status"=>500)));
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "message"=>"Parámetro faltante: id de iglesia",
-               "status"=>500)));
+               "status"=>422)));
    } else if(empty($subject)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "message"=>"Parámetro faltante: asunto",
-               "status"=>500)));
+               "status"=>422)));
    }else if(empty($message)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "message"=>"Parámetro faltante: mensaje",
-               "status"=>500)));
+               "status"=>422)));
    }
 
    // if exist user
@@ -58493,7 +53896,6 @@ $app->post('/settings/contact-us', function ($request,$response) {
 });
 
 // notification list
-
 $app->get('/notifications/list', function ($request,$response) {
 
   try{
@@ -58504,33 +53906,33 @@ $app->get('/notifications/list', function ($request,$response) {
    $language = $request->getParam('language');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($language)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: language",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: idioma",
+               "status"=>422)));
    }
 
    // if exist user
@@ -58602,24 +54004,24 @@ $app->post('/users/profile', function ($request,$response) {
    $church_id = $request->getParam('church_id');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    }
     
    $pre_i = $con->prepare("SELECT *
                             FROM user
-                            WHERE id = :user_id AND church_id = :church_id", 
+                            WHERE id = :user_id AND church_id = :church_id AND status ='1' AND verified_account = '1'", 
                             array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
    $values_i = array(':user_id' => $user_id, ':church_id' => $church_id);
@@ -58631,7 +54033,7 @@ $app->post('/users/profile', function ($request,$response) {
      // Roles
      $user_rol = null;
 
-     $pre = $con->prepare("SELECT user.id, CONCAT(user.first_name, ' ', user.last_name) AS full_name, user.first_name, user.last_name, user.email, user.phone, user.address,user.postal_code, user.city, user.gender, user.birth_date, user.marital_status, user.married_since, user.guest_since, user.member_since, user.profile_picture,user.rol, user.exelerate_id, user.is_complete, churches.name AS church_name, churches.id AS church_id FROM user INNER JOIN churches ON user.church_id = churches.id  WHERE user.id = :user_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+     $pre = $con->prepare("SELECT user.id, CONCAT(user.first_name, ' ', user.last_name) AS full_name, user.first_name, user.last_name, user.email, user.phone, user.address,user.latitude,user.longitude,user.latitude_delta,user.longitude_delta,user.postal_code, user.city, user.gender, user.birth_date, user.marital_status, user.married_since, user.guest_since, user.member_since, user.profile_picture,user.rol, user.exelerate_id, user.is_complete, churches.name AS church_name, churches.id AS church_id FROM user INNER JOIN churches ON user.church_id = churches.id  WHERE user.id = :user_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
      $values = array(':user_id' => $user_id);
      $pre->execute($values);
@@ -58794,7 +54196,7 @@ $app->post('/users/profile', function ($request,$response) {
 
      // obtain settings and notifications for user
      $pre_sett = $con->prepare("SELECT reports_mail, reports_mobile,members_mail,members_mobile,
-     		                      news_mail, news_mobile
+                              news_mail, news_mobile
                                   FROM user_settings
                                   WHERE user_id = :user_id", 
                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
@@ -58804,7 +54206,7 @@ $app->post('/users/profile', function ($request,$response) {
      $result_sett = $pre_sett->fetch();
 
      if (!$result_sett) {
-     	$result_sett = null;
+      $result_sett = null;
      }
 
 
@@ -58816,6 +54218,10 @@ $app->post('/users/profile', function ($request,$response) {
        "email" => $result['email'],
        "phone" => $result['phone'],
        "address" => $result['address'],
+       "latitude" => $result['latitude'],
+       "longitude" => $result['longitude'],
+       "latitude_delta" => $result['latitude_delta'],
+       "longitude_delta" => $result['longitude_delta'],
        "postal_code" => $result['postal_code'],
        "city" => $result['city'],
        "gender" => $result['gender'],
@@ -58860,7 +54266,6 @@ $app->post('/users/profile', function ($request,$response) {
 
 });
 
-
 $app->put('/users/edit-profile', function ($request,$response) {
 
   try{
@@ -58897,40 +54302,40 @@ $app->put('/users/edit-profile', function ($request,$response) {
    $valid_member = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$member_since);
 
    if(empty($parent_user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: parent_user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario padre",
+               "status"=>422)));
    } else if(empty($parent_role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: parent_role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario padre",
+               "status"=>422)));
    } else if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    }
 
     // Validations depending on the parameters sent
@@ -58952,7 +54357,7 @@ $app->put('/users/edit-profile', function ($request,$response) {
         return $response->withStatus(422)
                 ->withHeader('Content-Type', 'application/json')
                 ->withJson(array('error' => array(
-                  "message"=>"You must enter a valid birthdate",
+                  "message"=>"Debes ingresar una fecha de nacimiento válida",
                   "status"=>422)));
        }
 
@@ -59008,21 +54413,21 @@ $app->put('/users/edit-profile', function ($request,$response) {
                 ->withHeader('Content-Type', 'application/json')
                 ->withJson(array('error' => array(
                   "type"=>"impersonate_not_valid",
-                  "message"=>"Parámetro impersonate no es válido",
+                  "message"=>"Parámetro impersonado no es válido",
                   "status"=>422)));
       }else if(empty($impersonate_id)){
        return $response->withStatus(500)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: impersonate_id",
+                 "message"=>"Parámetro faltante: id impersonado",
                  "status"=>500)));
      } else if(empty($impersonate_role)){
        return $response->withStatus(500)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: impersonate_role",
+                 "message"=>"Parámetro faltante: rol impersonado",
                  "status"=>500)));
      }
 
@@ -59119,11 +54524,66 @@ $app->put('/users/edit-profile', function ($request,$response) {
 
       $final_d = date("Y-m-d H:i:s");
 
+      // Obtain latitude and longitude of group cell
+      $final_ad = urlencode($address);
+      $final_city = urlencode($city);
+      $geo = $final_ad . ',+' . $final_city;
+
+      $latitude = null;
+      $longitude = null;
+      $latitude_delta = null;
+      $longitude_delta = null;
+
+      if ($address || $city) {
+        $url = "https://maps.googleapis.com/maps/api/geocode/json?address=$geo&key=AIzaSyBF-rxaBu86zHTWlFMketjgJaftZ3HR9YU";
+
+        $ch = curl_init();
+
+        curl_setopt($ch,CURLOPT_URL, $url);
+        curl_setopt($ch,CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+        $result_map = curl_exec($ch);
+
+        curl_close($ch);
+
+        if ($result_map) {
+          $data = json_decode($result_map);
+
+          if($data->status == "OK"){
+              $lat = $data->results[0]->geometry->location->lat;
+              $lng = $data->results[0]->geometry->location->lng;
+
+              // latitude delta
+              $lat_nth = $data->results[0]->geometry->viewport->northeast->lat;
+              $lng_sth = $data->results[0]->geometry->viewport->southwest->lat;
+              $diff = $lat_nth - $lng_sth;
+
+              // longitude delta
+              $lat_nth2 = $data->results[0]->geometry->viewport->northeast->lng;
+              $lng_sth2 = $data->results[0]->geometry->viewport->southwest->lng;
+              $diff2 = $lat_nth2 - $lng_sth2;
+
+              // adding values
+              $latitude = $lat;
+              $longitude = $lng;
+              $latitude_delta = $diff;
+              $longitude_delta = $diff2;
+          }
+
+        }
+
+      }
+
       // update user info
       $pre = $con->prepare("UPDATE user SET first_name = :first_name,
                              last_name = :last_name,
                              phone = :phone,
                              address = :address,
+                             latitude = :latitude,
+                             longitude = :longitude,
+                             latitude_delta = :latitude_delta,
+                             longitude_delta = :longitude_delta,
                              postal_code = :postal_code,
                              city = :city,
                              gender= :gender,
@@ -59144,6 +54604,10 @@ $app->put('/users/edit-profile', function ($request,$response) {
         ':last_name' => $last_name,
         ':phone' => $phone,
         ':address' => $address,
+        ':latitude' => $latitude,
+        ':longitude' => $longitude,
+        ':latitude_delta' => $latitude_delta,
+        ':longitude_delta' => $longitude_delta,
         ':postal_code' => $postal_code,
         ':city' => $city,
         ':gender' => $gender,
@@ -59286,6 +54750,10 @@ $app->put('/users/edit-profile', function ($request,$response) {
                           ':last_name' => $last_name,
                           ':phone' => $phone,
                           ':address' => $address,
+                          ':latitude' => $latitude,
+                          ':longitude' => $longitude,
+                          ':latitude_delta' => $latitude_delta,
+                          ':longitude_delta' => $longitude_delta,
                           ':postal_code' => $postal_code,
                           ':city' => $city,
                           ':gender' => $gender,
@@ -59329,47 +54797,47 @@ $app->post('/users/assign-steps', function ($request,$response) {
     $step_date = $request->getParam('step_date');
 
     if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($step_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: step id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id del paso",
+               "status"=>422)));
    }else if(empty($step_name)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: step name",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: nombre del paso",
+               "status"=>422)));
    }else if(empty($step_date)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: step date",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: fecha del paso",
+               "status"=>422)));
    }
 
    $valid_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$step_date);
@@ -59552,6 +55020,3193 @@ $app->post('/users/assign-steps', function ($request,$response) {
 });
 
 
+/*TIMELINE GENERAL*/
+
+$app->post('/general/timeline/list-comments', function ($request,$response) {
+
+  try{
+   $con = $this->db;
+   $owner_id = $request->getParam('owner_id');
+   $role_id = $request->getParam('role_id');
+   $church_id = $request->getParam('church_id');
+   $type = $request->getParam('type');
+   $commented_id = $request->getParam('commented_id');
+
+   if(empty($owner_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "message"=>"Missing parameter: id del propietario",
+               "status"=>422)));
+   } else if(empty($role_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "message"=>"Missing parameter: rol del propietario",
+               "status"=>422)));
+   } else if(empty($church_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "message"=>"Missing parameter: id de iglesia",
+               "status"=>422)));
+   } else if(empty($type)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "message"=>"Missing parameter: tipo",
+               "status"=>422)));
+   } else if(empty($commented_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "message"=>"Missing parameter: id de comentado",
+               "status"=>422)));
+   }
+
+
+  $pre_i = $con->prepare("SELECT *
+                           FROM user
+                           WHERE id = :owner_id AND rol = :role_id AND church_id = :church_id AND verified_account = '1'", 
+                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+  $values_i = array(':owner_id' => $owner_id,':role_id' => $role_id, ':church_id' => $church_id);
+  $pre_i->execute($values_i);
+  $result_i = $pre_i->fetch();
+
+  if ($result_i) {
+
+      $final_d = date("Y-m-d H:i:s");
+
+      if ($type == 'user') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM user
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $sql1 = "SELECT timeline_user.id, timeline_user.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_user.created_at FROM timeline_user, user WHERE timeline_user.owner_id = user.id AND user_id = $commented_id ORDER BY timeline_user.created_at DESC";
+          
+
+          foreach ($con->query($sql1) as $row1) {
+            $timeline_comment[] = $row1;
+          }
+
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_comment));
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "message"=>"El usuario que quieres comentar no existe",
+                      "status"=>422)));
+        }
+        
+      } else if ($type == 'member') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM members_cells
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $final_role = $result_fi['role'];
+
+          $sql1 = "SELECT timeline_user.id, timeline_user.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_user.created_at FROM timeline_user, user WHERE timeline_user.owner_id = user.id AND timeline_user.member_id = $commented_id ORDER BY timeline_user.created_at DESC";
+          
+
+          foreach ($con->query($sql1) as $row1) {
+            $timeline_comment[] = $row1;
+          }
+
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_comment));
+
+
+        }else{
+
+          if ($final_role == '1') {
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"El invitado que quieres comentar no existe",
+                        "status"=>422)));
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"El mimebro que quieres comentar no existe",
+                        "status"=>422)));
+
+          }
+          
+        }
+
+        
+      } else if ($type == 'district') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_districts
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $sql1 = "SELECT timeline_group.id, timeline_group.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_group.created_at FROM timeline_group, user WHERE timeline_group.owner_id = user.id AND timeline_group.district_id = $commented_id ORDER BY timeline_group.created_at DESC";
+          
+
+          foreach ($con->query($sql1) as $row1) {
+            $timeline_comment[] = $row1;
+          }
+
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_comment));
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "message"=>"El distrito que quieres comentar no existe",
+                      "status"=>422)));
+        }
+
+
+      }else if ($type == 'zone') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_zones
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $sql1 = "SELECT timeline_group.id, timeline_group.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_group.created_at FROM timeline_group, user WHERE timeline_group.owner_id = user.id AND timeline_group.zone_id = $commented_id ORDER BY timeline_group.created_at DESC";
+          
+
+          foreach ($con->query($sql1) as $row1) {
+            $timeline_comment[] = $row1;
+          }
+
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_comment));
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "message"=>"La zona que quieres comentar no existe",
+                      "status"=>422)));
+        }
+
+      } else if ($type == 'sector') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_sectors
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $sql1 = "SELECT timeline_group.id, timeline_group.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_group.created_at FROM timeline_group, user WHERE timeline_group.owner_id = user.id AND timeline_group.sector_id = $commented_id ORDER BY timeline_group.created_at DESC";
+          
+
+          foreach ($con->query($sql1) as $row1) {
+            $timeline_comment[] = $row1;
+          }
+
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_comment));
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "message"=>"El sector que quieres comentar no existe",
+                      "status"=>422)));
+        }
+
+      }else if ($type == 'cell') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_cells
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $sql1 = "SELECT timeline_group.id, timeline_group.comment, CONCAT(user.first_name, ' ', user.last_name) AS comment_owner, user.profile_picture as profile_picture_owner, timeline_group.created_at FROM timeline_group, user WHERE timeline_group.owner_id = user.id AND timeline_group.cell_id = $commented_id ORDER BY timeline_group.created_at DESC";
+          
+
+          foreach ($con->query($sql1) as $row1) {
+            $timeline_comment[] = $row1;
+          }
+
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_comment));
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "message"=>"La célula que quieres comentar no existe.",
+                      "status"=>422)));
+        }
+
+      }else{
+
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "message"=>"paramétro tipo no existe",
+                    "status"=>422)));
+      }
+
+
+  }else{
+    return $response->withStatus(422)
+            ->withHeader('Content-Type', 'application/json')
+            ->withJson(array('error' => array(
+                "message"=>"Usuario con este rol no existe",
+                "status"=>422)));
+  }
+
+
+ }
+ catch(\Exception $ex){
+   return $response->withJson(array('error' => array(
+                "message"=> $ex->getMessage(),
+                "status"=>422)),422);
+ }
+
+});
+
+
+$app->post('/general/timeline/add-comments', function ($request,$response) {
+
+  try{
+   $con = $this->db;
+   $owner_id = $request->getParam('owner_id');
+   $role_id = $request->getParam('role_id');
+   $church_id = $request->getParam('church_id');
+   $type = $request->getParam('type');
+   $commented_id = $request->getParam('commented_id');
+   $comment = $request->getParam('comment');
+
+   /*Impersonate*/
+   $impersonate = $request->getParam('impersonate');
+   $impersonate_id = $request->getParam('impersonate_id');
+   $impersonate_role = $request->getParam('impersonate_role');
+
+   if(empty($owner_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de propietario",
+               "status"=>422)));
+   } else if(empty($role_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: rol de propietario",
+               "status"=>422)));
+   } else if(empty($church_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
+   } else if(empty($type)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: tipo",
+               "status"=>422)));
+   } else if(empty($commented_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de comentado",
+               "status"=>422)));
+   } else if(empty($comment)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: comentario",
+               "status"=>422)));
+   }
+
+
+   /*Impersonate*/
+   if ($impersonate) {
+     
+     if ($impersonate != '1') {
+       return $response->withStatus(422)
+               ->withHeader('Content-Type', 'application/json')
+               ->withJson(array('error' => array(
+                 "type"=>"impersonate_not_valid",
+                 "message"=>"Parámetro impersonado no es válido",
+                 "status"=>422)));
+     }else if(empty($impersonate_id)){
+      return $response->withStatus(422)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('error' => array(
+                "type"=>"required",
+                "message"=>"Parámetro faltante: id de impersonado",
+                "status"=>422)));
+    } else if(empty($impersonate_role)){
+      return $response->withStatus(422)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('error' => array(
+                "type"=>"required",
+                "message"=>"Parámetro faltante: role de impersonado",
+                "status"=>422)));
+    }
+
+    $pre_imper = $con->prepare("SELECT * FROM user WHERE id = :impersonate_id AND rol = :impersonate_role AND church_id = :church_id AND status = '1' AND verified_account = '1'", 
+                               array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+    $values_imper = array(':impersonate_id' => $impersonate_id,':impersonate_role' => $impersonate_role, ':church_id' => $church_id);
+    $pre_imper->execute($values_imper);
+    $result_imper = $pre_imper->fetch();
+
+    if (empty($result_imper)) {
+
+     return $response->withStatus(422)
+            ->withHeader('Content-Type', 'application/json')
+            ->withJson(array('error' => array(
+                       "type"=>"impersonate_not_exist",
+                       "message"=>"Usuario impersonado con este rol no existe",
+                       "status"=>422)));
+    }
+
+
+    $name_imper = $result_imper['first_name'];
+    $last_name_imper = $result_imper['last_name'];
+
+   }
+
+
+  $pre_i = $con->prepare("SELECT *
+                           FROM user
+                           WHERE id = :owner_id AND rol = :role_id AND church_id = :church_id AND verified_account = '1'", 
+                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+  $values_i = array(':owner_id' => $owner_id,':role_id' => $role_id, ':church_id' => $church_id);
+  $pre_i->execute($values_i);
+  $result_i = $pre_i->fetch();
+
+  if ($result_i) {
+
+      $final_d = date("Y-m-d H:i:s");
+
+      if ($type == 'user') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM user
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $name_commented = $result_fi['first_name'];
+          $last_name_commented = $result_fi['last_name'];
+
+          $role_commented = $result_fi['rol'];
+
+          $sql = "INSERT INTO timeline_user (`comment`, `type_user`,`user_id`,`member_id`,`owner_id`,`created_at`,`updated_at`) VALUES (:comment,:type,:commented_id,NULL,:owner_id,'$final_d','$final_d')";
+          
+          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          
+          $values = array(
+                 ':comment' => $comment,
+                 ':type' => $type,
+                 ':commented_id' => $commented_id,
+                 ':owner_id' => $owner_id
+                 );
+          
+          $result = $pre->execute($values);
+          $final_id = $con->lastInsertId();
+
+          /*Obtain name of owner comment*/
+          $pre_ow = $con->prepare("SELECT *
+                                   FROM user
+                                   WHERE id = :owner_id AND church_id = :church_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
+          $pre_ow->execute($values_ow);
+          $result_ow = $pre_ow->fetch();
+
+          $first_name = $result_ow['first_name'];
+          $last_name = $result_ow['last_name'];
+
+          /*comments members*/  
+          if ($role_commented == '5') {
+            
+            $pre_mem = $con->prepare("SELECT *
+                                     FROM user_groups
+                                     WHERE user_id = :commented_id", 
+                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_mem = array(':commented_id' => $commented_id);
+            $pre_mem->execute($values_mem);
+            $result_mem = $pre_mem->fetch();
+
+            /*obtain sector*/
+            $sector_mem = $result_mem['sector_id'];
+
+            /*obtain cell*/
+            $cell_mem = $result_mem['cell_id'];
+
+            /*obtain supervisor*/
+            $pre_le = $con->prepare("SELECT *
+                                     FROM groups_sectors
+                                     WHERE id = :sector_mem", 
+                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_le = array(':sector_mem' => $sector_mem);
+            $pre_le->execute($values_le);
+            $result_le = $pre_le->fetch();
+
+            $lead_princi = $result_le['supervisor'];
+
+          } else if ($role_commented == '4') {
+            
+            $pre_mem = $con->prepare("SELECT *
+                                     FROM user_groups
+                                     WHERE user_id = :commented_id", 
+                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_mem = array(':commented_id' => $commented_id);
+            $pre_mem->execute($values_mem);
+            $result_mem = $pre_mem->fetch();
+
+            /*obtain zone*/
+            $zone_mem = $result_mem['zone_id'];
+
+            /*obtain sector*/
+            $sector_mem = $result_mem['sector_id'];
+
+            /*obtain zone_pastor*/
+            $pre_le = $con->prepare("SELECT *
+                                     FROM groups_zones
+                                     WHERE id = :zone_mem", 
+                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_le = array(':zone_mem' => $zone_mem);
+            $pre_le->execute($values_le);
+            $result_le = $pre_le->fetch();
+
+            $lead_princi = $result_le['zone_pastor'];
+
+          } else if ($role_commented == '3') {
+            
+            $pre_mem = $con->prepare("SELECT *
+                                     FROM user_groups
+                                     WHERE user_id = :commented_id", 
+                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_mem = array(':commented_id' => $commented_id);
+            $pre_mem->execute($values_mem);
+            $result_mem = $pre_mem->fetch();
+
+            /*obtain district*/
+            $district_mem = $result_mem['district_id'];
+
+            /*obtain zone*/
+            $zone_mem = $result_mem['zone_id'];
+
+            /*obtain district_pastor*/
+            $pre_le = $con->prepare("SELECT *
+                                     FROM groups_districts
+                                     WHERE id = :district_mem", 
+                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_le = array(':district_mem' => $district_mem);
+            $pre_le->execute($values_le);
+            $result_le = $pre_le->fetch();
+
+            $lead_princi = $result_le['district_pastor'];
+
+          } else if ($role_commented == '2') {
+            
+            $pre_mem = $con->prepare("SELECT *
+                                     FROM user_groups
+                                     WHERE user_id = :commented_id", 
+                                     array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_mem = array(':commented_id' => $commented_id);
+            $pre_mem->execute($values_mem);
+            $result_mem = $pre_mem->fetch();
+
+            /*obtain district*/
+            $district_mem = $result_mem['district_id'];
+
+          }
+
+
+          if($result){
+
+            /*************** ACTIVITIES ***********************/
+
+            if ($impersonate) {
+             
+              $roles = getRole($impersonate_role);
+
+              $role_name = $roles['role_name'];
+              $role_name_es = $roles['role_name_es'];
+
+              $imperson = " (Impersonate)";
+              $imperson_es = " (Impersonado)";
+
+              /*Activity Other member left a comment in their timeline*/
+              $en_message = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in their timeline";
+              $es_message = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en tu timeline";
+
+            } else{
+
+              /*Activity Other member left a comment in their timeline*/
+              $en_message = $first_name . " " . $last_name . " left a comment in their timeline";
+              $es_message = $first_name . " " . $last_name . " dejó un comentario en tu timeline";
+
+            }
+
+            /*Activity Other member left a comment in their timeline*/
+            $pre_act = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message, :en_message,NULL,NULL,NULL,NULL,:id_m,NULL,'1',:final_id,NULL,:final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_act = array(
+                ':es_message' => $es_message, 
+                ':en_message' => $en_message, 
+                ':id_m' => $commented_id,
+                ':final_id' => $final_id,
+                ':final_d' => $final_d);
+
+            $result_act = $pre_act->execute($values_act);
+
+            return $response->withStatus(200)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente', 'id' => $final_id)));
+          }else{
+              return $response->withStatus(422)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('error' => array(
+                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                  "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"user_commented",
+                      "message"=>"El usuario al que quieres comentar no existe",
+                      "status"=>422)));
+        }
+        
+      } else if ($type == 'member') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM members_cells
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        $final_role = $result_fi['role'];
+
+        if ($result_fi) {
+
+          $name_commented = $result_fi['first_name'];
+          $last_name_commented = $result_fi['last_name'];
+          $cell_commented = $result_fi['cell_id'];
+          $role_commented = $result_fi['role'];
+
+          $sql = "INSERT INTO timeline_user (`comment`, `type_user`,`user_id`,`member_id`,`owner_id`,`created_at`,`updated_at`) VALUES (:comment,:type,NULL,:commented_id,:owner_id,'$final_d','$final_d')";
+          
+          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          
+          $values = array(
+                 ':comment' => $comment,
+                 ':type' => $type,
+                 ':commented_id' => $commented_id,
+                 ':owner_id' => $owner_id
+                 );
+          
+          $result = $pre->execute($values);
+          $final_id = $con->lastInsertId();
+
+          /*Obtain name of owner comment*/
+          $pre_ow = $con->prepare("SELECT *
+                                   FROM user
+                                   WHERE id = :owner_id AND church_id = :church_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
+          $pre_ow->execute($values_ow);
+          $result_ow = $pre_ow->fetch();
+
+          $first_name = $result_ow['first_name'];
+          $last_name = $result_ow['last_name'];
+
+          /*Obtain leader of cell commented (activity)*/
+          $pre_c = $con->prepare("SELECT *
+                                   FROM groups_cells
+                                   WHERE id = :cell_commented AND church_id = :church_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_c = array(':cell_commented' => $cell_commented,':church_id' => $church_id);
+          $pre_c->execute($values_c);
+          $result_c = $pre_c->fetch();
+
+          $principal_leader = $result_c['leader'];
+
+          if($result){
+
+            if ($impersonate) {
+             
+              $roles = getRole($impersonate_role);
+
+              $role_name = $roles['role_name'];
+              $role_name_es = $roles['role_name_es'];
+
+              $imperson = " (Impersonate)";
+              $imperson_es = " (Impersonado)";
+
+              /*Activity Other member left a comment in their timeline (Guest/Cell Member)*/
+              $en_message = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in their timeline";
+              $es_message = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en tu timeline";
+
+            }else{
+
+              /*Activity Other member left a comment in their timeline (Guest/Cell Member)*/
+              $en_message = $first_name . " " . $last_name . " left a comment in their timeline";
+              $es_message = $first_name . " " . $last_name . " dejó un comentario en tu timeline";
+            }
+
+            /*Activity Other member left a comment in their timeline (Guest/Cell Member)*/
+            $pre_act = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message, :en_message,NULL,NULL,NULL,NULL,NULL, :id_m,'1',:final_id,NULL,:final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_act = array(
+                ':es_message' => $es_message,
+                ':en_message' => $en_message, 
+                ':id_m' => $commented_id,
+                ':final_id' => $final_id,
+                ':final_d' => $final_d);
+
+            $result_act = $pre_act->execute($values_act);
+
+            return $response->withStatus(200)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente', 'id' => $final_id)));
+          }else{
+              return $response->withStatus(422)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('error' => array(
+                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                  "status"=>422)));
+          }
+
+
+        }else{
+
+          if ($final_role == '1') {
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"member_commented",
+                        "message"=>"El invitado al que quieres comentar no existe.",
+                        "status"=>422)));
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                      "type"=>"member_commented",
+                      "message"=>"El miembro al que quieres comentar no existe.",
+                      "status"=>422)));
+
+          }
+          
+        }
+
+        
+      } else if ($type == 'district') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_districts
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $final_dis_pastor = $result_fi['district_pastor'];
+
+          $final_dis = $result_fi['district_code'];
+
+          $sql = "INSERT INTO timeline_group (`comment`, `type_group`,`owner_id`,`district_id`,`zone_id`,`sector_id`,`cell_id`,`created_at`,`updated_at`) VALUES (:comment,:type,:owner_id,:commented_id,NULL,NULL,NULL,'$final_d','$final_d')";
+          
+          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          
+          $values = array(
+            ':comment' => $comment,
+            ':type' => $type,
+            ':commented_id' => $commented_id,
+            ':owner_id' => $owner_id
+          );
+          
+          $result = $pre->execute($values);
+          $final_id = $con->lastInsertId();
+
+
+          /*Obtain name of owner comment*/
+          $pre_ow = $con->prepare("SELECT *
+                                   FROM user
+                                   WHERE id = :owner_id AND church_id = :church_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
+          $pre_ow->execute($values_ow);
+          $result_ow = $pre_ow->fetch();
+
+          $first_name = $result_ow['first_name'];
+          $last_name = $result_ow['last_name'];
+
+
+          if($result){
+
+            if ($impersonate) {
+             
+              $roles = getRole($impersonate_role);
+
+              $role_name = $roles['role_name'];
+              $role_name_es = $roles['role_name_es'];
+
+              $imperson = " (Impersonate)";
+              $imperson_es = " (Impersonado)";
+
+              /*ACTIVITY GROUPS*/
+              /*Activity Other member left a comment in the District (District)*/
+              $en_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in district D" . $final_dis;
+              $es_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en el distrito D" . $final_dis;
+
+            }else{
+
+              /*ACTIVITY GROUPS*/
+              /*Activity Other member left a comment in the District (District)*/
+              $en_message2 = $first_name . " " . $last_name . " left a comment in district D" . $final_dis;
+              $es_message2 = $first_name . " " . $last_name . " dejó un comentario en el distrito D" . $final_dis;
+            }
+
+            /*ACTIVITY GROUPS*/
+
+            /*Activity Other member left a comment in the District (District)*/
+            $pre_act2 = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message2, :en_message2,:commented_id,NULL,NULL,NULL,NULL,NULL,'1',NULL, :final_id, :final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_act2 = array(
+                ':es_message2' => $es_message2, 
+                ':en_message2' => $en_message2, 
+                ':commented_id' => $commented_id,
+                ':final_id' => $final_id,
+                ':final_d' => $final_d);
+
+            $result_act2 = $pre_act2->execute($values_act2);
+
+            return $response->withStatus(200)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente', 'id' => $final_id)));
+          }else{
+              return $response->withStatus(422)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('error' => array(
+                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                  "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"district_commented",
+                      "message"=>"El distrito al que quieres comentar no existe.",
+                      "status"=>422)));
+        }
+
+
+      }else if ($type == 'zone') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_zones
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $final_dis = $result_fi['district_code'];
+          $final_zone = $result_fi['zone_code'];
+
+          $final_zone_pastor = $result_fi['zone_pastor'];
+          $district_f = $result_fi['district_id'];
+
+
+          $sql = "INSERT INTO timeline_group (`comment`, `type_group`,`owner_id`,`district_id`,`zone_id`,`sector_id`,`cell_id`,`created_at`,`updated_at`) VALUES (:comment,:type,:owner_id,NULL,:commented_id,NULL,NULL,'$final_d','$final_d')";
+          
+          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          
+          $values = array(
+            ':comment' => $comment,
+            ':type' => $type,
+            ':commented_id' => $commented_id,
+            ':owner_id' => $owner_id
+          );
+          
+          $result = $pre->execute($values);
+          $final_id = $con->lastInsertId();
+
+
+          /*Obtain name of owner comment*/
+          $pre_ow = $con->prepare("SELECT *
+                                   FROM user
+                                   WHERE id = :owner_id AND church_id = :church_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
+          $pre_ow->execute($values_ow);
+          $result_ow = $pre_ow->fetch();
+
+          $first_name = $result_ow['first_name'];
+          $last_name = $result_ow['last_name'];
+
+          if($result){
+
+            /*************** ACTIVITIES ***********************/
+            if ($impersonate) {
+             
+              $roles = getRole($impersonate_role);
+
+              $role_name = $roles['role_name'];
+              $role_name_es = $roles['role_name_es'];
+
+              $imperson = " (Impersonate)";
+              $imperson_es = " (Impersonado)";
+
+              /*ACTIVITY GROUPS*/
+
+              /*Activity Other member left a comment in the Zone (Zone)*/
+              $en_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in Zone D" . $final_dis . " Z" . $final_zone;
+              $es_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en la Zona D" . $final_dis . " Z" . $final_zone;
+
+            }else{
+
+              /*ACTIVITY GROUPS*/
+
+              /*Activity Other member left a comment in the Zone (Zone)*/
+              $en_message2 = $first_name . " " . $last_name . " left a comment in Zone D" . $final_dis . " Z" . $final_zone;
+              $es_message2 = $first_name . " " . $last_name . " dejó un comentario en la Zona D" . $final_dis . " Z" . $final_zone;
+            }  
+
+            /*ACTIVITY GROUPS*/
+
+            /*Activity Other member left a comment in the Zone (Zone)*/
+            $pre_act2 = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message2, :en_message2,NULL,:commented_id,NULL,NULL,NULL,NULL,'1',NULL, :final_id, :final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_act2 = array(
+                ':es_message2' => $es_message2, 
+                ':en_message2' => $en_message2, 
+                ':commented_id' => $commented_id,
+                ':final_id' => $final_id,
+                ':final_d' => $final_d);
+
+            $result_act2 = $pre_act2->execute($values_act2);
+
+            return $response->withStatus(200)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente', 'id' => $final_id)));
+          }else{
+              return $response->withStatus(422)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('error' => array(
+                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                  "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"zone_commented",
+                      "message"=>"La zona al que quieres comentar no existe.",
+                      "status"=>422)));
+        }
+
+      } else if ($type == 'sector') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_sectors
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $final_dis = $result_fi['district_code'];
+          $final_zone = $result_fi['zone_code'];
+          $final_sec = $result_fi['sector_code'];
+
+          $final_supervisor = $result_fi['supervisor'];
+          $zone_f = $result_fi['zone_id'];
+
+          $sql = "INSERT INTO timeline_group (`comment`, `type_group`,`owner_id`,`district_id`,`zone_id`,`sector_id`,`cell_id`,`created_at`,`updated_at`) VALUES (:comment,:type,:owner_id,NULL,NULL,:commented_id,NULL,'$final_d','$final_d')";
+          
+          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          
+          $values = array(
+            ':comment' => $comment,
+            ':type' => $type,
+            ':commented_id' => $commented_id,
+            ':owner_id' => $owner_id
+          );
+          
+          $result = $pre->execute($values);
+          $final_id = $con->lastInsertId();
+
+
+          /*Obtain name of owner comment*/
+          $pre_ow = $con->prepare("SELECT *
+                                   FROM user
+                                   WHERE id = :owner_id AND church_id = :church_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
+          $pre_ow->execute($values_ow);
+          $result_ow = $pre_ow->fetch();
+
+          $first_name = $result_ow['first_name'];
+          $last_name = $result_ow['last_name'];
+
+          if($result){
+
+            /*************** ACTIVITIES ***********************/
+            if ($impersonate) {
+             
+              $roles = getRole($impersonate_role);
+
+              $role_name = $roles['role_name'];
+              $role_name_es = $roles['role_name_es'];
+
+              $imperson = " (Impersonate)";
+              $imperson_es = " (Impersonado)";
+
+              /*ACTIVITY GROUPS*/
+
+              /*Activity Other member left a comment in the Sector (Sector)*/
+              $en_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in Sector D" . $final_dis . " Z" . $final_zone . " S" . $final_sec;
+              $es_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en el sector D" . $final_dis . " Z" . $final_zone . " S" . $final_sec;
+
+            }else{
+
+              /*ACTIVITY GROUPS*/
+
+              /*Activity Other member left a comment in the Sector (Sector)*/
+              $en_message2 = $first_name . " " . $last_name . " left a comment in Sector D" . $final_dis . " Z" . $final_zone . " S" . $final_sec;
+              $es_message2 = $first_name . " " . $last_name . " dejó un comentario en el sector D" . $final_dis . " Z" . $final_zone . " S" . $final_sec;
+            }
+
+            /*ACTIVITY GROUPS*/
+
+            /*Activity Other member left a comment in the Sector (Sector)*/
+            $pre_act2 = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message2, :en_message2,NULL,NULL,:commented_id,NULL,NULL,NULL,'1',NULL, :final_id, :final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_act2 = array(
+                ':es_message2' => $es_message2, 
+                ':en_message2' => $en_message2, 
+                ':commented_id' => $commented_id,
+                ':final_id' => $final_id,
+                ':final_d' => $final_d);
+
+            $result_act2 = $pre_act2->execute($values_act2);
+
+            return $response->withStatus(200)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente', 'id' => $final_id)));
+          }else{
+              return $response->withStatus(422)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('error' => array(
+                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                  "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"sector_commented",
+                      "message"=>"El sector al que quieres comentar no existe.",
+                      "status"=>422)));
+        }
+
+      }else if ($type == 'cell') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_cells
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $final_dis = $result_fi['district_code'];
+          $final_zone = $result_fi['zone_code'];
+          $final_sec = $result_fi['sector_code'];
+          $final_cell = $result_fi['cell_code'];
+
+          $final_leader = $result_fi['leader'];
+          $sector_f = $result_fi['sector_id'];
+
+          $sql = "INSERT INTO timeline_group (`comment`, `type_group`,`owner_id`,`district_id`,`zone_id`,`sector_id`,`cell_id`,`created_at`,`updated_at`) VALUES (:comment,:type,:owner_id,NULL,NULL,NULL,:commented_id,'$final_d','$final_d')";
+          
+          $pre  = $con->prepare($sql, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+          
+          $values = array(
+            ':comment' => $comment,
+            ':type' => $type,
+            ':commented_id' => $commented_id,
+            ':owner_id' => $owner_id
+          );
+          
+          $result = $pre->execute($values);
+          $final_id = $con->lastInsertId();
+
+          /*Obtain name of owner comment*/
+          $pre_ow = $con->prepare("SELECT *
+                                   FROM user
+                                   WHERE id = :owner_id AND church_id = :church_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ow = array(':owner_id' => $owner_id,':church_id' => $church_id);
+          $pre_ow->execute($values_ow);
+          $result_ow = $pre_ow->fetch();
+
+          $first_name = $result_ow['first_name'];
+          $last_name = $result_ow['last_name'];
+
+          if($result){
+
+            /*************** ACTIVITIES ***********************/
+            if ($impersonate) {
+             
+              $roles = getRole($impersonate_role);
+
+              $role_name = $roles['role_name'];
+              $role_name_es = $roles['role_name_es'];
+
+              $imperson = " (Impersonate)";
+              $imperson_es = " (Impersonado)";
+
+              /*ACTIVITY GROUPS*/
+
+              /*Activity Other member left a comment in the Cell Group (Cell Group)*/
+              $en_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson . " left a comment in Cell Group D" . $final_dis . " Z" . $final_zone . " S" . $final_sec . " C" . $final_cell;
+              $es_message2 = $role_name . " " . $name_imper . " " . $last_name_imper . $imperson_es . " dejó un comentario en la célula D" . $final_dis . " Z" . $final_zone . " S" . $final_sec . " C" . $final_cell;
+
+            }else{
+
+              /*ACTIVITY GROUPS*/
+
+              /*Activity Other member left a comment in the Cell Group (Cell Group)*/
+              $en_message2 = $first_name . " " . $last_name . " left a comment in Cell Group D" . $final_dis . " Z" . $final_zone . " S" . $final_sec . " C" . $final_cell;
+              $es_message2 = $first_name . " " . $last_name . " dejó un comentario en la célula D" . $final_dis . " Z" . $final_zone . " S" . $final_sec . " C" . $final_cell;
+            }
+
+            /*ACTIVITY GROUPS*/
+
+            /*Activity Other member left a comment in the Cell Group (Cell Group)*/
+            $pre_act2 = $con->prepare("INSERT INTO activity (`es_message`, `en_message`, `district_id`,`zone_id`,`sector_id`,`cell_id`,`user_id`,`member_id`,`is_comment`,`id_comment_user_timeline`,`id_comment_group_timeline`,`created_at`,`updated_at`) VALUES (:es_message2, :en_message2,NULL,NULL,NULL,:commented_id,NULL,NULL,'1',NULL, :final_id, :final_d, :final_d)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values_act2 = array(
+                ':es_message2' => $es_message2, 
+                ':en_message2' => $en_message2, 
+                ':commented_id' => $commented_id,
+                ':final_id' => $final_id,
+                ':final_d' => $final_d);
+
+            $result_act2 = $pre_act2->execute($values_act2);
+
+            return $response->withStatus(200)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('response' => array('message' => 'Comentario agregado exitosamente.', 'id' => $final_id)));
+          }else{
+              return $response->withStatus(422)
+                              ->withHeader('Content-Type', 'application/json')
+                              ->withJson(array('error' => array(
+                                  "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                  "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"cell_commented",
+                      "message"=>"La célula que quieres comentar no existe.",
+                      "status"=>422)));
+        }
+
+      }else{
+
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "type"=>"type_doesnt_exist",
+                    "message"=>"El tipo de parámetro no existe",
+                    "status"=>422)));
+      }
+
+
+  }else{
+    return $response->withStatus(422)
+            ->withHeader('Content-Type', 'application/json')
+            ->withJson(array('error' => array(
+                "type"=>"user_doesnt_exist",
+                "message"=>"El usuario no existe.",
+                "status"=>422)));
+  }
+
+
+ }
+ catch(\Exception $ex){
+   return $response->withJson(array('error' => array(
+                "message"=> $ex->getMessage(),
+                "status"=>422)),422);
+ }
+
+});
+
+
+$app->post('/general/timeline/edit-comments', function ($request,$response) {
+
+  try{
+   $con = $this->db;
+   $owner_id = $request->getParam('owner_id');
+   $role_id = $request->getParam('role_id');
+   $church_id = $request->getParam('church_id');
+   $type = $request->getParam('type');
+   $commented_id = $request->getParam('commented_id');
+   $comment = $request->getParam('comment');
+   $comment_id = $request->getParam('comment_id');
+
+   if(empty($owner_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de propietario",
+               "status"=>422)));
+   } else if(empty($role_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: rol de propietario",
+               "status"=>422)));
+   } else if(empty($church_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
+   } else if(empty($type)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: tipo",
+               "status"=>422)));
+   } else if(empty($commented_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de comentado",
+               "status"=>422)));
+   } else if(empty($comment)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: comentario",
+               "status"=>422)));
+   } else if(empty($comment_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de comentario",
+               "status"=>422)));
+   }
+
+
+  $pre_i = $con->prepare("SELECT *
+                           FROM user
+                           WHERE id = :owner_id AND rol = :role_id AND church_id = :church_id AND verified_account = '1'", 
+                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+  $values_i = array(':owner_id' => $owner_id,':role_id' => $role_id, ':church_id' => $church_id);
+  $pre_i->execute($values_i);
+  $result_i = $pre_i->fetch();
+
+  if ($result_i) {
+
+      $final_d = date("Y-m-d H:i:s");
+
+      if ($type == 'user') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM user
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_user
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND user_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("UPDATE timeline_user SET comment = :comment,
+                                   type_user = :type,
+                                   user_id = :commented_id,
+                                   owner_id = :owner_id,
+                                   updated_at = :updated_at
+                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment' => $comment,
+              ':type' => $type,
+              ':commented_id' => $commented_id,
+              ':owner_id' => $owner_id,
+              ':comment_id' => $comment_id,
+              ':updated_at' => $final_d
+              );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Comentario editado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"user_commented",
+                      "message"=>"El usuario no existe",
+                      "status"=>422)));
+        }
+        
+      } else if ($type == 'member') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM members_cells
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_user
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND member_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("UPDATE timeline_user SET comment = :comment,
+                                   type_user = :type,
+                                   member_id = :commented_id,
+                                   owner_id = :owner_id,
+                                   updated_at = :updated_at
+                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment' => $comment,
+              ':type' => $type,
+              ':commented_id' => $commented_id,
+              ':owner_id' => $owner_id,
+              ':comment_id' => $comment_id,
+              ':updated_at' => $final_d
+              );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Comentario editado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+
+          if ($final_role == '1') {
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"member_commented",
+                        "message"=>"El invitado no existe.",
+                        "status"=>422)));
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"member_commented",
+                        "message"=>"El miembro no existe.",
+                        "status"=>422)));
+
+          }
+          
+        }
+
+        
+      } else if ($type == 'district') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_districts
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_group
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND district_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("UPDATE timeline_group SET comment = :comment,
+                                   type_group = :type,
+                                   district_id = :commented_id,
+                                   owner_id = :owner_id,
+                                   updated_at = :updated_at
+                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment' => $comment,
+              ':type' => $type,
+              ':commented_id' => $commented_id,
+              ':owner_id' => $owner_id,
+              ':comment_id' => $comment_id,
+              ':updated_at' => $final_d
+              );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Comentario editado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"district_commented",
+                      "message"=>"El distrito no existe.",
+                      "status"=>422)));
+        }
+
+
+      }else if ($type == 'zone') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_zones
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_group
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND zone_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("UPDATE timeline_group SET comment = :comment,
+                                   type_group = :type,
+                                   zone_id = :commented_id,
+                                   owner_id = :owner_id,
+                                   updated_at = :updated_at
+                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment' => $comment,
+              ':type' => $type,
+              ':commented_id' => $commented_id,
+              ':owner_id' => $owner_id,
+              ':comment_id' => $comment_id,
+              ':updated_at' => $final_d
+              );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Comentario editado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"zone_commented",
+                      "message"=>"La zona no existe.",
+                      "status"=>422)));
+        }
+
+      } else if ($type == 'sector') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_sectors
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_group
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND sector_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("UPDATE timeline_group SET comment = :comment,
+                                   type_group = :type,
+                                   sector_id = :commented_id,
+                                   owner_id = :owner_id,
+                                   updated_at = :updated_at
+                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment' => $comment,
+              ':type' => $type,
+              ':commented_id' => $commented_id,
+              ':owner_id' => $owner_id,
+              ':comment_id' => $comment_id,
+              ':updated_at' => $final_d
+              );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Commentario editado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"sector_commented",
+                      "message"=>"El sector no existe.",
+                      "status"=>422)));
+        }
+
+      }else if ($type == 'cell') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_cells
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_group
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND cell_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("UPDATE timeline_group SET comment = :comment,
+                                   type_group = :type,
+                                   cell_id = :commented_id,
+                                   owner_id = :owner_id,
+                                   updated_at = :updated_at
+                                   WHERE id = :comment_id AND owner_id = :owner_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment' => $comment,
+              ':type' => $type,
+              ':commented_id' => $commented_id,
+              ':owner_id' => $owner_id,
+              ':comment_id' => $comment_id,
+              ':updated_at' => $final_d
+              );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Commentario editado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"cell_commented",
+                      "message"=>"La célula no existe.",
+                      "status"=>422)));
+        }
+
+      }else{
+
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "type"=>"type_doesnt_exist",
+                    "message"=>"El tipo de parámetro no existe",
+                    "status"=>422)));
+      }
+
+
+  }else{
+    return $response->withStatus(422)
+            ->withHeader('Content-Type', 'application/json')
+            ->withJson(array('error' => array(
+                "type"=>"user_doesnt_exist",
+                "message"=>"El usuario no existe.",
+                "status"=>422)));
+  }
+
+
+ }
+ catch(\Exception $ex){
+   return $response->withJson(array('error' => array(
+                "message"=> $ex->getMessage(),
+                "status"=>422)),422);
+ }
+
+});
+
+
+$app->post('/general/timeline/delete-comments', function ($request,$response) {
+
+  try{
+   $con = $this->db;
+   $owner_id = $request->getParam('owner_id');
+   $role_id = $request->getParam('role_id');
+   $church_id = $request->getParam('church_id');
+   $type = $request->getParam('type');
+   $commented_id = $request->getParam('commented_id');
+   $comment_id = $request->getParam('comment_id');
+
+   if(empty($owner_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de propietario",
+               "status"=>422)));
+   } else if(empty($role_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: rol de propietario",
+               "status"=>422)));
+   } else if(empty($church_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
+   } else if(empty($type)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: tipo",
+               "status"=>422)));
+   } else if(empty($commented_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de comentado",
+               "status"=>422)));
+   } else if(empty($comment_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de comentario",
+               "status"=>422)));
+   }
+
+
+  $pre_i = $con->prepare("SELECT *
+                           FROM user
+                           WHERE id = :owner_id AND rol = :role_id AND church_id = :church_id AND verified_account = '1'", 
+                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+  $values_i = array(':owner_id' => $owner_id,':role_id' => $role_id, ':church_id' => $church_id);
+  $pre_i->execute($values_i);
+  $result_i = $pre_i->fetch();
+
+  if ($result_i) {
+
+      $final_d = date("Y-m-d H:i:s");
+
+      if ($type == 'user') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM user
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_user
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND user_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("DELETE FROM timeline_user WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment_id' => $comment_id
+            );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Comentario eliminado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"user_commented",
+                      "message"=>"El usuario comentado no existe",
+                      "status"=>422)));
+        }
+        
+      } else if ($type == 'member') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM members_cells
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_user
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND member_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("DELETE FROM timeline_user WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment_id' => $comment_id
+            );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Comentario eliminado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "type"=>"member_commented",
+                                    "message"=>"El miembro al que quieres comentar no existe.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+
+          if ($final_role == '1') {
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"member_commented",
+                        "message"=>"El invitado comentado no existe.",
+                        "status"=>422)));
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"member_commented",
+                        "message"=>"El miembro comentado no existe.",
+                        "status"=>422)));
+
+          }
+          
+        }
+
+        
+      } else if ($type == 'district') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_districts
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_group
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND district_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("DELETE FROM timeline_group WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment_id' => $comment_id
+            );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Comentario eliminado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"district_commented",
+                      "message"=>"El distrito comentado no existe.",
+                      "status"=>422)));
+        }
+
+
+      }else if ($type == 'zone') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_zones
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_group
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND zone_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("DELETE FROM timeline_group WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment_id' => $comment_id
+            );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Comentario eliminado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"zone_commented",
+                      "message"=>"La zona comentada no existe.",
+                      "status"=>422)));
+        }
+
+      } else if ($type == 'sector') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_sectors
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_group
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND sector_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("DELETE FROM timeline_group WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment_id' => $comment_id
+            );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Comentario eliminado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"sector_commented",
+                      "message"=>"El sector comentado no existe.",
+                      "status"=>422)));
+        }
+
+      }else if ($type == 'cell') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_cells
+                                 WHERE id = :commented_id AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':commented_id' => $commented_id,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $pre_ve = $con->prepare("SELECT *
+                                   FROM timeline_group
+                                   WHERE id = :comment_id AND owner_id = :owner_id AND cell_id = :commented_id", 
+                                   array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+          $values_ve = array(':comment_id' => $comment_id,':owner_id' => $owner_id, ':commented_id' => $commented_id);
+          $pre_ve->execute($values_ve);
+          $result_ve = $pre_ve->fetch();
+
+          if ($result_ve) {
+
+            $pre = $con->prepare("DELETE FROM timeline_group WHERE id = :comment_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+            $values = array(
+              ':comment_id' => $comment_id
+            );
+
+            $result = $pre->execute($values);
+
+
+            if($result){
+              return $response->withStatus(200)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('response' => 'Commentario eliminado exitosamente'));
+            }else{
+                return $response->withStatus(422)
+                                ->withHeader('Content-Type', 'application/json')
+                                ->withJson(array('error' => array(
+                                    "message"=>"Ha ocurrido un problema, vuelve a intentarlo nuevamente.",
+                                    "status"=>422)));
+            }
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"comment_doesnt_exist",
+                        "message"=>"El comentario no existe",
+                        "status"=>422)));
+          }
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"cell_commented",
+                      "message"=>"La célula comentada no existe.",
+                      "status"=>422)));
+        }
+
+      }else{
+
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "type"=>"type_doesnt_exist",
+                    "message"=>"El tipo de parámetro no existe",
+                    "status"=>422)));
+      }
+
+
+  }else{
+    return $response->withStatus(422)
+            ->withHeader('Content-Type', 'application/json')
+            ->withJson(array('error' => array(
+                "type"=>"user_doesnt_exist",
+                "message"=>"El usuario no existe.",
+                "status"=>422)));
+  }
+
+
+ }
+ catch(\Exception $ex){
+   return $response->withJson(array('error' => array(
+                "message"=> $ex->getMessage(),
+                "status"=>422)),422);
+ }
+
+});
+
+
+$app->post('/general/timeline/list-timeline', function ($request,$response) {
+
+  try{
+   $con = $this->db;
+   $user_id = $request->getParam('user_id');
+   $role_id = $request->getParam('role_id');
+   $church_id = $request->getParam('church_id');
+   $type = $request->getParam('type');
+   $id_timeline_owner = $request->getParam('id_timeline_owner');
+   $language = $request->getParam('language');
+   $start_date = $request->getParam('start_date');
+   $end_date = $request->getParam('end_date');
+   $keywords = $request->getParam('keywords');
+
+   if(empty($user_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
+   } else if(empty($role_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
+   } else if(empty($church_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
+   } else if(empty($type)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: tipo",
+               "status"=>422)));
+   } else if(empty($id_timeline_owner)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: id de timeline de propietario",
+               "status"=>422)));
+   } else if(empty($language)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+               "type"=>"required",
+               "message"=>"Parámetro faltante: idioma",
+               "status"=>422)));
+   }
+
+
+  $valid_initial_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$start_date);
+  $valid_end_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$end_date);
+
+
+  $pre_i = $con->prepare("SELECT *
+                           FROM user
+                           WHERE id = :user_id AND rol = :role_id AND church_id = :church_id AND verified_account = '1'", 
+                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+  $values_i = array(':user_id' => $user_id,':role_id' => $role_id, ':church_id' => $church_id);
+  $pre_i->execute($values_i);
+  $result_i = $pre_i->fetch();
+
+  if ($result_i) {
+
+      $final_d = date("Y-m-d H:i:s");
+
+      /*TYPE USER*/
+      if ($type == 'user') {
+
+        /*verified user exits*/
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM user
+                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          
+          $date_filter=null;
+
+          /*if exist date filter*/
+          if ($start_date && $end_date) {
+
+            if (!$valid_initial_date || !$valid_end_date) {
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
+                        "status"=>422)));
+            } else if($start_date > $end_date){
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
+                        "status"=>422)));
+            }
+
+            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
+          }
+
+          /*verified language*/
+          if ($language == 'en') {
+            /*sql of complete activity en*/
+            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE user_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else if ($language == 'es'){
+            /*sql of complete activity es*/
+            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE user_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"Tipo de lenguaje inválido",
+                        "status"=>422)));
+          }
+
+          $timeline_ac = [];
+
+          foreach ($con->query($sql_en) as $row1) {
+
+            $activity_line = $row1;
+
+            if ($row1['is_comment'] == '1') {
+
+              /*sql for comment*/
+              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_user.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_user.owner_id = user.id) as full_name, (SELECT id from user where timeline_user.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_user.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_user.id = :comment_id";
+
+              if ($row1['id_comment_user_timeline'] == null){
+
+                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_user.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_user.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
+
+              }
+
+              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+              $values_gro = array(
+                ':comment_id' => $row1['id_comment_user_timeline'] != null ?$row1['id_comment_user_timeline']:$row1['id_comment_group_timeline']
+              );
+              
+              $result_gro = $pre_gro->execute($values_gro);
+              $result_gro = $pre_gro->fetch();
+
+              /*add info owner comment*/
+              $activity_line['owner_id'] = $result_gro['owner_id'];
+              $activity_line['comment'] = $result_gro['comment'];
+              $activity_line['full_name'] = $result_gro['full_name'];
+              $activity_line['profile_picture'] = $result_gro['profile_picture'];
+              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
+              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
+
+            }
+
+            /*final array*/
+            $timeline_ac[] = $activity_line;
+          }
+
+          /*if exist keywords filter*/
+          if ($keywords) {
+
+            $timeline_filter = [];
+            /*regex keywords*/
+            $regex  = "/". $keywords. "/";
+
+            foreach ($timeline_ac as $item) {
+              /*preg_match for comment or msg*/
+              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
+              {
+                $timeline_filter[] = $item;
+              }
+            }
+
+            if (count($timeline_filter) == 0) {
+              $timeline_ac = null;
+            }else{
+              $timeline_ac = $timeline_filter;
+            }
+
+          }
+          
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_ac));
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"user_timeline_owner",
+                      "message"=>"El usuario no existe.",
+                      "status"=>422)));
+        }
+        
+        /*TYPE MEMBER*/
+      } else if ($type == 'member') {
+
+        /*verified member exits*/
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM members_cells
+                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+
+        if ($result_fi) {
+
+          $date_filter=null;
+
+          /*if exist date filter*/
+          if ($start_date && $end_date) {
+
+            if (!$valid_initial_date || !$valid_end_date) {
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
+                        "status"=>422)));
+            } else if($start_date > $end_date){
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
+                        "status"=>422)));
+            }
+
+            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
+          }
+
+          /*verified language*/
+          if ($language == 'en') {
+            /*sql of complete activity en*/
+            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE member_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else if ($language == 'es'){
+            /*sql of complete activity es*/
+            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE member_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"Tipo de lenguaje inválido",
+                        "status"=>422)));
+          }
+
+          $timeline_ac = [];
+
+          foreach ($con->query($sql_en) as $row1) {
+
+            $activity_line = $row1;
+
+            if ($row1['is_comment'] == '1') {
+
+              /*sql for comment*/
+              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_user.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_user.owner_id = user.id) as full_name, (SELECT id from user where timeline_user.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_user.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_user.id = :comment_id";
+
+              if ($row1['id_comment_user_timeline'] == null){
+
+                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_user.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_user.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
+
+              }
+
+              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+              $values_gro = array(
+                ':comment_id' => $row1['id_comment_user_timeline'] != null ?$row1['id_comment_user_timeline']:$row1['id_comment_group_timeline']
+              );
+              
+              $result_gro = $pre_gro->execute($values_gro);
+              $result_gro = $pre_gro->fetch();
+
+              /*add info owner comment*/
+              $activity_line['owner_id'] = $result_gro['owner_id'];
+              $activity_line['comment'] = $result_gro['comment'];
+              $activity_line['full_name'] = $result_gro['full_name'];
+              $activity_line['profile_picture'] = $result_gro['profile_picture'];
+              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
+              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
+
+            }
+
+            /*final array*/
+            $timeline_ac[] = $activity_line;
+          }
+
+          /*if exist keywords filter*/
+          if ($keywords) {
+
+            $timeline_filter = [];
+            /*regex keywords*/
+            $regex  = "/". $keywords. "/";
+
+            foreach ($timeline_ac as $item) {
+              /*preg_match for comment or msg*/
+              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
+              {
+                $timeline_filter[] = $item;
+              }
+            }
+
+            if (count($timeline_filter) == 0) {
+              $timeline_ac = null;
+            }else{
+              $timeline_ac = $timeline_filter;
+            }
+
+          }
+          
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_ac));
+
+
+        }else{
+
+          return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"member_timeline_owner",
+                        "message"=>"El miembro no existe.",
+                        "status"=>422)));          
+        }
+
+        
+      } else if ($type == 'district') {
+
+        /*verified district exits*/
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_districts
+                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $date_filter=null;
+
+          /*if exist date filter*/
+          if ($start_date && $end_date) {
+
+            if (!$valid_initial_date || !$valid_end_date) {
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
+                        "status"=>422)));
+            } else if($start_date > $end_date){
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
+                        "status"=>422)));
+            }
+
+            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
+          }
+
+          /*verified language*/
+          if ($language == 'en') {
+            /*sql of complete activity en*/
+            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE district_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else if ($language == 'es'){
+            /*sql of complete activity es*/
+            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE district_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"Tipo de lenguaje inválido",
+                        "status"=>422)));
+          }
+
+          $timeline_ac = [];
+
+          foreach ($con->query($sql_en) as $row1) {
+
+            $activity_line = $row1;
+
+            if ($row1['is_comment'] == '1') {
+
+              /*sql for comment*/
+              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
+
+              if ($row1['id_comment_group_timeline'] == null){
+
+                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_group.id = :comment_id";
+
+              }
+
+              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+              $values_gro = array(
+                ':comment_id' => $row1['id_comment_group_timeline'] != null ?$row1['id_comment_group_timeline']:$row1['id_comment_user_timeline']
+              );
+              
+              $result_gro = $pre_gro->execute($values_gro);
+              $result_gro = $pre_gro->fetch();
+
+              /*add info owner comment*/
+              $activity_line['owner_id'] = $result_gro['owner_id'];
+              $activity_line['comment'] = $result_gro['comment'];
+              $activity_line['full_name'] = $result_gro['full_name'];
+              $activity_line['profile_picture'] = $result_gro['profile_picture'];
+              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
+              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
+
+            }
+
+            /*final array*/
+            $timeline_ac[] = $activity_line;
+          }
+
+          /*if exist keywords filter*/
+          if ($keywords) {
+
+            $timeline_filter = [];
+            /*regex keywords*/
+            $regex  = "/". $keywords. "/";
+
+            foreach ($timeline_ac as $item) {
+              /*preg_match for comment or msg*/
+              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
+              {
+                $timeline_filter[] = $item;
+              }
+            }
+
+            if (count($timeline_filter) == 0) {
+              $timeline_ac = null;
+            }else{
+              $timeline_ac = $timeline_filter;
+            }
+
+          }
+          
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_ac));
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"district_timeline_owner",
+                      "message"=>"El distrito no existe.",
+                      "status"=>422)));
+        }
+
+
+      }else if ($type == 'zone') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_zones
+                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $date_filter=null;
+
+          /*if exist date filter*/
+          if ($start_date && $end_date) {
+
+            if (!$valid_initial_date || !$valid_end_date) {
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
+                        "status"=>422)));
+            } else if($start_date > $end_date){
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
+                        "status"=>422)));
+            }
+
+            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
+          }
+
+          /*verified language*/
+          if ($language == 'en') {
+            /*sql of complete activity en*/
+            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE zone_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else if ($language == 'es'){
+            /*sql of complete activity es*/
+            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE zone_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"Tipo de lenguaje inválido",
+                        "status"=>422)));
+          }
+
+          $timeline_ac = [];
+
+          foreach ($con->query($sql_en) as $row1) {
+
+            $activity_line = $row1;
+
+            if ($row1['is_comment'] == '1') {
+
+              /*sql for comment*/
+              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
+
+
+              if ($row1['id_comment_group_timeline'] == null){
+
+                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_group.id = :comment_id";
+
+              }
+
+              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+              $values_gro = array(
+                ':comment_id' => $row1['id_comment_group_timeline'] != null ?$row1['id_comment_group_timeline']:$row1['id_comment_user_timeline']
+              );
+              
+              $result_gro = $pre_gro->execute($values_gro);
+              $result_gro = $pre_gro->fetch();
+
+              /*add info owner comment*/
+              $activity_line['owner_id'] = $result_gro['owner_id'];
+              $activity_line['comment'] = $result_gro['comment'];
+              $activity_line['full_name'] = $result_gro['full_name'];
+              $activity_line['profile_picture'] = $result_gro['profile_picture'];
+              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
+              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
+
+            }
+
+            /*final array*/
+            $timeline_ac[] = $activity_line;
+          }
+
+          /*if exist keywords filter*/
+          if ($keywords) {
+
+            $timeline_filter = [];
+            /*regex keywords*/
+            $regex  = "/". $keywords. "/";
+
+            foreach ($timeline_ac as $item) {
+              /*preg_match for comment or msg*/
+              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
+              {
+                $timeline_filter[] = $item;
+              }
+            }
+
+            if (count($timeline_filter) == 0) {
+              $timeline_ac = null;
+            }else{
+              $timeline_ac = $timeline_filter;
+            }
+
+          }
+          
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_ac));
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"zone_timeline_owner",
+                      "message"=>"La zona no existe.",
+                      "status"=>422)));
+        }
+
+      } else if ($type == 'sector') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_sectors
+                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $date_filter=null;
+
+          /*if exist date filter*/
+          if ($start_date && $end_date) {
+
+            if (!$valid_initial_date || !$valid_end_date) {
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
+                        "status"=>422)));
+            } else if($start_date > $end_date){
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
+                        "status"=>422)));
+            }
+
+            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
+          }
+
+          /*verified language*/
+          if ($language == 'en') {
+            /*sql of complete activity en*/
+            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE sector_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else if ($language == 'es'){
+            /*sql of complete activity es*/
+            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE sector_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"Tipo de lenguaje inválido",
+                        "status"=>422)));
+          }
+
+          $timeline_ac = [];
+
+          foreach ($con->query($sql_en) as $row1) {
+
+            $activity_line = $row1;
+
+            if ($row1['is_comment'] == '1') {
+
+              /*sql for comment*/
+              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
+
+              if ($row1['id_comment_group_timeline'] == null){
+
+                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_group.id = :comment_id";
+
+              }
+
+              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+              $values_gro = array(
+                ':comment_id' => $row1['id_comment_group_timeline'] != null ?$row1['id_comment_group_timeline']:$row1['id_comment_user_timeline']
+              );
+              
+              $result_gro = $pre_gro->execute($values_gro);
+              $result_gro = $pre_gro->fetch();
+
+              /*add info owner comment*/
+              $activity_line['owner_id'] = $result_gro['owner_id'];
+              $activity_line['comment'] = $result_gro['comment'];
+              $activity_line['full_name'] = $result_gro['full_name'];
+              $activity_line['profile_picture'] = $result_gro['profile_picture'];
+              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
+              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
+
+            }
+
+            /*final array*/
+            $timeline_ac[] = $activity_line;
+          }
+
+          /*if exist keywords filter*/
+          if ($keywords) {
+
+            $timeline_filter = [];
+            /*regex keywords*/
+            $regex  = "/". $keywords. "/";
+
+            foreach ($timeline_ac as $item) {
+              /*preg_match for comment or msg*/
+              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
+              {
+                $timeline_filter[] = $item;
+              }
+            }
+
+            if (count($timeline_filter) == 0) {
+              $timeline_ac = null;
+            }else{
+              $timeline_ac = $timeline_filter;
+            }
+
+          }
+          
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_ac));
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"sector_timeline_owner",
+                      "message"=>"El sector no existe.",
+                      "status"=>422)));
+        }
+
+      }else if ($type == 'cell') {
+
+        $pre_fi = $con->prepare("SELECT *
+                                 FROM groups_cells
+                                 WHERE id = :id_timeline_owner AND church_id = :church_id", 
+                                 array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_fi = array(':id_timeline_owner' => $id_timeline_owner,':church_id' => $church_id);
+        $pre_fi->execute($values_fi);
+        $result_fi = $pre_fi->fetch();
+
+        if ($result_fi) {
+
+          $date_filter=null;
+
+          /*if exist date filter*/
+          if ($start_date && $end_date) {
+
+            if (!$valid_initial_date || !$valid_end_date) {
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"Debe ingresar una fecha inicial y una fecha de finalización válidas",
+                        "status"=>422)));
+            } else if($start_date > $end_date){
+              return $response->withStatus(422)
+                      ->withHeader('Content-Type', 'application/json')
+                      ->withJson(array('error' => array(
+                        "message"=>"La fecha de finalización debe ser mayor que la fecha de inicio",
+                        "status"=>422)));
+            }
+
+            $date_filter = "AND (activity.created_at BETWEEN '".$start_date."' AND '".$end_date."')";
+          }
+
+          /*verified language*/
+          if ($language == 'en') {
+            /*sql of complete activity en*/
+            $sql_en = "SELECT en_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE cell_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else if ($language == 'es'){
+            /*sql of complete activity es*/
+            $sql_en = "SELECT es_message as activity_msg, is_comment, id_comment_user_timeline, id_comment_group_timeline, created_at FROM activity WHERE cell_id = $id_timeline_owner ".$date_filter." ORDER BY created_at DESC";
+
+          }else{
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"Tipo de lenguaje inválido",
+                        "status"=>422)));
+          }
+
+          $timeline_ac = [];
+
+          foreach ($con->query($sql_en) as $row1) {
+
+            $activity_line = $row1;
+
+            if ($row1['is_comment'] == '1') {
+
+              /*sql for comment*/
+              $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_group where timeline_group.id = :comment_id";
+
+              if ($row1['id_comment_group_timeline'] == null){
+
+                $sql_gro = "SELECT *, (SELECT profile_picture from user where timeline_group.owner_id = user.id) as profile_picture, (SELECT CONCAT(user.first_name, ' ', user.last_name) from user where timeline_group.owner_id = user.id) as full_name, (SELECT id from user where timeline_group.owner_id = user.id) as id_user_commented, (SELECT rol from user where timeline_group.owner_id = user.id) as role_user_commented FROM timeline_user where timeline_group.id = :comment_id";
+
+              }
+
+              $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+              $values_gro = array(
+                ':comment_id' => $row1['id_comment_group_timeline'] != null ?$row1['id_comment_group_timeline']:$row1['id_comment_user_timeline']
+              );
+              
+              $result_gro = $pre_gro->execute($values_gro);
+              $result_gro = $pre_gro->fetch();
+
+              /*add info owner comment*/
+              $activity_line['owner_id'] = $result_gro['owner_id'];
+              $activity_line['comment'] = $result_gro['comment'];
+              $activity_line['full_name'] = $result_gro['full_name'];
+              $activity_line['profile_picture'] = $result_gro['profile_picture'];
+              $activity_line['id_user_commented'] = $result_gro['id_user_commented'];
+              $activity_line['role_user_commented'] = $result_gro['role_user_commented'];
+            }
+
+            /*final array*/
+            $timeline_ac[] = $activity_line;
+          }
+
+          /*if exist keywords filter*/
+          if ($keywords) {
+
+            $timeline_filter = [];
+            /*regex keywords*/
+            $regex  = "/". $keywords. "/";
+
+            foreach ($timeline_ac as $item) {
+              /*preg_match for comment or msg*/
+              if(preg_match($regex, $item['comment'], $match) || preg_match($regex, $item['activity_msg'], $match)) 
+              {
+                $timeline_filter[] = $item;
+              }
+            }
+
+            if (count($timeline_filter) == 0) {
+              $timeline_ac = null;
+            }else{
+              $timeline_ac = $timeline_filter;
+            }
+
+          }
+          
+          return $response->withStatus(200)
+                            ->withHeader('Content-Type', 'application/json')
+                            ->withJson(array('response' => $timeline_ac));
+
+
+        }else{
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"cell_timeline_owner",
+                      "message"=>"La célula no existe.",
+                      "status"=>422)));
+        }
+
+      }else{
+
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "type"=>"type_doesnt_exist",
+                    "message"=>"El tipo de parámetro no existe",
+                    "status"=>422)));
+      }
+
+
+  }else{
+    return $response->withStatus(422)
+            ->withHeader('Content-Type', 'application/json')
+            ->withJson(array('error' => array(
+                "type"=>"user_doesnt_exist",
+                "message"=>"El usuario no existe.",
+                "status"=>422)));
+  }
+
+
+ }
+ catch(\Exception $ex){
+   return $response->withJson(array('error' => array(
+                "message"=> $ex->getMessage(),
+                "status"=>422)),422);
+ }
+
+});
+
+
 /******************** GROUP CELL PROFILE ********************/
 
 $app->post('/cells/profile', function ($request,$response) {
@@ -59564,34 +58219,34 @@ $app->post('/cells/profile', function ($request,$response) {
    $cell_id = $request->getParam('cell_id');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($cell_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: cell_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de célula",
+               "status"=>422)));
    }
       
     $pre_user = $con->prepare("SELECT *
@@ -59632,7 +58287,7 @@ $app->post('/cells/profile', function ($request,$response) {
     }
 
     // obtain general information
-    $pre = $con->prepare("SELECT groups_cells.id AS cell_id, groups_cells.cell_code AS cell_code, groups_cells.sector_code AS sector_code, groups_cells.zone_code AS zone_code, groups_cells.district_code AS district_code, groups_cells.parent_id, (SELECT id from members_cells WHERE members_cells.id = groups_cells.host) AS host_id, groups_cells.start_date AS since, groups_cells.city, groups_cells.address AS location, groups_cells.phone,groups_cells.zip_code, groups_cells.meets_on AS meets, groups_cells.meets_time, groups_cells.groups_type FROM groups_cells WHERE groups_cells.church_id = :church_id AND groups_cells.id = :cell_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+    $pre = $con->prepare("SELECT groups_cells.id AS cell_id, groups_cells.cell_code AS cell_code, groups_cells.sector_code AS sector_code, groups_cells.zone_code AS zone_code, groups_cells.district_code AS district_code, groups_cells.parent_id, (SELECT id from members_cells WHERE members_cells.id = groups_cells.host) AS host_id, groups_cells.start_date AS since, groups_cells.city, groups_cells.address AS location, groups_cells.longitude, groups_cells.latitude, groups_cells.latitude_delta, groups_cells.longitude_delta, groups_cells.phone,groups_cells.zip_code, groups_cells.meets_on AS meets, groups_cells.meets_time, groups_cells.groups_type FROM groups_cells WHERE groups_cells.church_id = :church_id AND groups_cells.id = :cell_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
     $values = array(':church_id' => $church_id, ':cell_id' => $cell_id);
     $pre->execute($values);
@@ -59702,7 +58357,7 @@ $app->post('/cells/profile', function ($request,$response) {
 
     $leader = array("name" => $result4['name'],
                "profile_picture" => $result4['profile_picture'],
-               "role" => $result4['role'],
+               "role" => '5',
                "member_role" => 'Leader');
 
     $cell_team = null;
@@ -59719,10 +58374,32 @@ $app->post('/cells/profile', function ($request,$response) {
 
      $host = array("name" => $result5['name'],
                "profile_picture" => $result5['profile_picture'],
-               "role" => $result5['role'],
+               "role" => '3',
                "member_role" => 'Host');
 
      $cell_team[] = $host;
+
+     /*Church Team (Add in future version)*/
+     $church_team = [
+      [
+        "name" => null,
+        "profile_picture" => null,
+        "role" => '1',
+        "member_role" => 'Senior Pastor'
+      ],
+      [
+        "name" => null,
+        "profile_picture" => null,
+        "role" => '3',
+        "member_role" => 'Zone Pastor'
+      ],
+      [
+        "name" => null,
+        "profile_picture" => null,
+        "role" => '4',
+        "member_role" => 'Supervisor'
+      ]
+     ];
 
     $res = array("cell_id" => $result['cell_id'],
            "cell_code" => $result['cell_code'],
@@ -59737,6 +58414,10 @@ $app->post('/cells/profile', function ($request,$response) {
            "since" => $result['since'],
            "city" => $result['city'],
            "address" => $result['location'],
+           "latitude" => $result['latitude'],
+           "longitude" => $result['longitude'],
+           "latitude_delta" => $result['latitude_delta'],
+           "longitude_delta" => $result['longitude_delta'],
            "phone_number" => $result['phone'],
            "zip_code" => $result['zip_code'],
            "meets" => $result['meets'],
@@ -59745,7 +58426,7 @@ $app->post('/cells/profile', function ($request,$response) {
            "guest_count" => $result3['guest_count'],
            "kids_count" => $result_kids['kids_count'],
            "cell_team" => $cell_team,
-           "church_team" => null, // add in future version
+           "church_team" => $church_team, // add in future version
          );
 
     return $response->withStatus(200)
@@ -59789,96 +58470,96 @@ $app->put('/cells/edit', function ($request,$response) {
    $valid_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$since);
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    }else if(empty($cell_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: cell_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de célula",
+               "status"=>422)));
    } else if(empty($meets)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: meets",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: día de reunión",
+               "status"=>422)));
    } else if(empty($meets_time)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: meets_time",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: hora de reunión",
+               "status"=>422)));
    } else if(empty($address)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: address",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: dirección",
+               "status"=>422)));
    } else if(empty($zip_code)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: zip_code",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: código postal",
+               "status"=>422)));
    } else if(empty($city)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: city",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: ciudad",
+               "status"=>422)));
    } else if(empty($phone_number)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: phone_number",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: teléfono",
+               "status"=>422)));
    } else if(empty($since)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: since",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: fecha de inicio",
+               "status"=>422)));
    } else if (!$valid_phone) {
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Invalid phone number",
-               "status"=>500)));
+               "message"=>"Numero de telefono inválido",
+               "status"=>422)));
    } else if(!$valid_date){
-        return $response->withStatus(500)
+        return $response->withStatus(422)
                 ->withHeader('Content-Type', 'application/json')
                 ->withJson(array('error' => array(
                    "type"=>"required",
-                  "message"=>"Invalid date",
-                  "status"=>500)));
+                  "message"=>"Fecha inválida",
+                  "status"=>422)));
   }
 
   /*Impersonate*/
@@ -59889,22 +58570,22 @@ $app->put('/cells/edit', function ($request,$response) {
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"impersonate_not_valid",
-                "message"=>"Parámetro impersonate no es válido",
+                "message"=>"Parámetro impersonado no es válido",
                 "status"=>422)));
     }else if(empty($impersonate_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: impersonate_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de impersonado",
+               "status"=>422)));
    } else if(empty($impersonate_role)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: impersonate_role",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de impersonado",
+               "status"=>422)));
    }
 
    $pre_imper = $con->prepare("SELECT * FROM user WHERE id = :impersonate_id AND rol = :impersonate_role AND church_id = :church_id AND status = '1' AND verified_account = '1'", 
@@ -60033,8 +58714,56 @@ $app->put('/cells/edit', function ($request,$response) {
 
   $final_d = date("Y-m-d H:i:s");
 
+  // Obtain latitude and longitude of group cell
+  $final_ad = urlencode($address);
+  $final_city = urlencode($city);
+  $geo = $final_ad . ',+' . $final_city;
+
+  $latitude = null;
+  $longitude = null;
+  $latitude_delta = null;
+  $longitude_delta = null;
+
+  $url = "https://maps.googleapis.com/maps/api/geocode/json?address=$geo&key=AIzaSyBF-rxaBu86zHTWlFMketjgJaftZ3HR9YU";
+
+  $ch = curl_init();
+
+  curl_setopt($ch,CURLOPT_URL, $url);
+  curl_setopt($ch,CURLOPT_RETURNTRANSFER, true);
+  curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+  $result_map = curl_exec($ch);
+
+  curl_close($ch);
+
+  if ($result_map) {
+    $data = json_decode($result_map);
+
+    if($data->status == "OK"){
+        $lat = $data->results[0]->geometry->location->lat;
+        $lng = $data->results[0]->geometry->location->lng;
+
+        // latitude delta
+        $lat_nth = $data->results[0]->geometry->viewport->northeast->lat;
+        $lng_sth = $data->results[0]->geometry->viewport->southwest->lat;
+        $diff = $lat_nth - $lng_sth;
+
+        // longitude delta
+        $lat_nth2 = $data->results[0]->geometry->viewport->northeast->lng;
+        $lng_sth2 = $data->results[0]->geometry->viewport->southwest->lng;
+        $diff2 = $lat_nth2 - $lng_sth2;
+
+        // adding values
+        $latitude = $lat;
+        $longitude = $lng;
+        $latitude_delta = $diff;
+        $longitude_delta = $diff2;
+    }
+
+  }
+
   // update group cell
-  $pre_dis3 = $con->prepare("UPDATE groups_cells SET meets_on = :meets, meets_time = :meets_time, address = :address, zip_code = :zip_code, city = :city, phone = :phone_number, start_date = :since ,updated_at = :final_d WHERE id = :cell_id AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+  $pre_dis3 = $con->prepare("UPDATE groups_cells SET meets_on = :meets, meets_time = :meets_time, address = :address, latitude = :latitude, longitude = :longitude, latitude_delta = :latitude_delta, longitude_delta = :longitude_delta, zip_code = :zip_code, city = :city, phone = :phone_number, start_date = :since ,updated_at = :final_d WHERE id = :cell_id AND church_id = :church_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
   $values_dis3 = array(
     ':cell_id' => $cell_id,
@@ -60042,6 +58771,10 @@ $app->put('/cells/edit', function ($request,$response) {
     ':meets' => $meets,
     ':meets_time' => $meets_time,
     ':address' => $address,
+    ':latitude' => $latitude,
+    ':longitude' => $longitude,
+    ':latitude_delta' => $latitude_delta,
+    ':longitude_delta' => $longitude_delta,
     ':zip_code' => $zip_code,
     ':city' => $city,
     ':phone_number' => $phone_number,
@@ -60168,33 +58901,33 @@ $app->get('/cells/member-list', function ($request,$response) {
    $cell_id = $request->getParam('cell_id');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($cell_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: cell_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de célula",
+               "status"=>422)));
    }
 
    // if exist user
@@ -60276,51 +59009,51 @@ $app->get('/reports/list', function ($request,$response) {
    $valid_end_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])$/",$final_date);
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if (($initial_date || $final_date) && empty($is_mobile)) {
 
         if (!$valid_initial_date || !$valid_end_date) {
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                   ->withHeader('Content-Type', 'application/json')
                   ->withJson(array('error' => array(
                     "type"=>"valid_filter_date",
                     "message"=>"Debe ingresar una fecha inicial y fecha final válidas para poder filtrar.",
-                    "status"=>500)));
+                    "status"=>422)));
         } else if($initial_date > $final_date){
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                   ->withHeader('Content-Type', 'application/json')
                   ->withJson(array('error' => array(
                     "type"=>"validate_final_date",
                     "message"=>"La fecha final debe ser mayor que la fecha inicial.",
-                    "status"=>500)));
+                    "status"=>422)));
         }
     }else if($is_mobile){
      if (!$valid_initial_date) {
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"validate_mobile",
                  "message"=>"Debes ingresar una fecha inicial válida",
-                 "status"=>500)));
+                 "status"=>422)));
      }
    }
 
@@ -60347,12 +59080,12 @@ $app->get('/reports/list', function ($request,$response) {
   if ($role_id == '2' || $role_id == '3' || $role_id == '4' || $role_id == '5') {
 
     if(empty($parent_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
                 "message"=>"Parámetro faltante: parent_id",
-                "status"=>500)));
+                "status"=>422)));
     }
   }
 
@@ -60368,12 +59101,12 @@ $app->get('/reports/list', function ($request,$response) {
     $result_dis = $pre_dis->fetch();
 
     if(empty($result_dis)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"parent_doesnt_exist",
                 "message"=>"El id del grupo padre no coincide con el usuario.",
-                "status"=>500)));
+                "status"=>422)));
     }
 
   } else if ($role_id == '3') {
@@ -60389,12 +59122,12 @@ $app->get('/reports/list', function ($request,$response) {
     $zone = $result_dis['zone_i'];
 
     if(empty($zone)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"parent_doesnt_exist",
                 "message"=>"El id del grupo padre no coincide con el usuario.",
-                "status"=>500)));
+                "status"=>422)));
     }
 
   } else if ($role_id == '4') {
@@ -60410,12 +59143,12 @@ $app->get('/reports/list', function ($request,$response) {
     $sec = $result_dis['sector_i'];
 
     if(empty($sec)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"parent_doesnt_exist",
                 "message"=>"El id del grupo padre no coincide con el usuario.",
-                "status"=>500)));
+                "status"=>422)));
     }
 
   } else if ($role_id == '5') {
@@ -60431,12 +59164,12 @@ $app->get('/reports/list', function ($request,$response) {
     $cell = $result_dis['cell_i'];
 
     if(empty($cell)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"parent_doesnt_exist",
                 "message"=>"El id del grupo padre no coincide con el usuario.",
-                "status"=>500)));
+                "status"=>422)));
     }
 
   }
@@ -60526,51 +59259,51 @@ $app->post('/download/report-list', function ($request,$response) {
    $valid_end_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])$/",$final_date);
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if (($initial_date || $final_date) && empty($is_mobile)) {
 
         if (!$valid_initial_date || !$valid_end_date) {
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                   ->withHeader('Content-Type', 'application/json')
                   ->withJson(array('error' => array(
                     "type"=>"valid_filter_date",
                     "message"=>"Debe ingresar una fecha inicial y fecha final válidas para poder filtrar.",
-                    "status"=>500)));
+                    "status"=>422)));
         } else if($initial_date > $final_date){
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                   ->withHeader('Content-Type', 'application/json')
                   ->withJson(array('error' => array(
                     "type"=>"validate_final_date",
                     "message"=>"La fecha final debe ser mayor que la fecha inicial.",
-                    "status"=>500)));
+                    "status"=>422)));
         }
     }else if($is_mobile){
      if (!$valid_initial_date) {
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"validate_mobile",
                  "message"=>"Debes ingresar una fecha inicial válida",
-                 "status"=>500)));
+                 "status"=>422)));
      }
    }
 
@@ -60597,12 +59330,12 @@ $app->post('/download/report-list', function ($request,$response) {
   if ($role_id == '2' || $role_id == '3' || $role_id == '4' || $role_id == '5') {
 
     if(empty($parent_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: parent_id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id padre",
+                "status"=>422)));
     }
   }
 
@@ -60618,12 +59351,12 @@ $app->post('/download/report-list', function ($request,$response) {
     $result_dis = $pre_dis->fetch();
 
     if(empty($result_dis)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"parent_doesnt_exist",
                 "message"=>"El id del grupo padre no coincide con el usuario.",
-                "status"=>500)));
+                "status"=>422)));
     }
 
   } else if ($role_id == '3') {
@@ -60639,12 +59372,12 @@ $app->post('/download/report-list', function ($request,$response) {
     $zone = $result_dis['zone_i'];
 
     if(empty($zone)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"parent_doesnt_exist",
                 "message"=>"El id del grupo padre no coincide con el usuario.",
-                "status"=>500)));
+                "status"=>422)));
     }
 
   } else if ($role_id == '4') {
@@ -60660,12 +59393,12 @@ $app->post('/download/report-list', function ($request,$response) {
     $sec = $result_dis['sector_i'];
 
     if(empty($sec)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"parent_doesnt_exist",
                 "message"=>"El id del grupo padre no coincide con el usuario.",
-                "status"=>500)));
+                "status"=>422)));
     }
 
   } else if ($role_id == '5') {
@@ -60681,12 +59414,12 @@ $app->post('/download/report-list', function ($request,$response) {
     $cell = $result_dis['cell_i'];
 
     if(empty($cell)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"parent_doesnt_exist",
                 "message"=>"El id del grupo padre no coincide con el usuario.",
-                "status"=>500)));
+                "status"=>422)));
     }
 
   }
@@ -60740,84 +59473,124 @@ $app->post('/download/report-list', function ($request,$response) {
     $filter_group = "AND reports.cell_id " . $filter_p;
   }
 
-  $final_date = date("Y-m-d H:i");
+  $final_date = date("Y-m-d H:i:s");
+  $o_date = date("Y-m-d");
 
   /*Obtain general list reports*/
-  $sql = "SELECT reports.name, reports.creation_date as date, (SELECT CONCAT(user.first_name, ' ', user.last_name) FROM user where user.id = reports.created_by) AS leader FROM reports, groups_cells WHERE reports.cell_id = groups_cells.id AND groups_cells.church_id = $church_id AND groups_cells.active = 1 $filter_date $filter_group ORDER BY reports.creation_date DESC";
+  $sql = "SELECT reports.is_complete, reports.name, reports.creation_date as date, (SELECT CONCAT(user.first_name, ' ', user.last_name) FROM user where user.id = reports.created_by) AS leader FROM reports, groups_cells WHERE reports.cell_id = groups_cells.id AND groups_cells.church_id = $church_id AND groups_cells.active = 1 $filter_date $filter_group ORDER BY reports.creation_date DESC";
 
   // create new PDF document
-  $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
-
-  // set document information
-  $pdf->SetCreator('PDF');
-  $pdf->SetAuthor('C+');
-  $pdf->SetTitle('Listado de reportes');
-  $pdf->SetSubject('Listado de reportes');
-  $pdf->SetKeywords('');
-
-  // set default header data
-  $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
-  $pdf->setFooterData(array(0,64,0), array(0,64,128));
-
-  // set header and footer fonts
-  $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
-  $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
-
-  // set default monospaced font
-  $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
-
-  // set margins
-  $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
-  $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
-  $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
-
-  // set auto page breaks
-  $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
-
-  // set image scale factor
-  $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
-
-  // set default font subsetting mode
-  $pdf->setFontSubsetting(true);
-
-  // Set font
-  $pdf->SetFont('helvetica', '', 12, '', true);
-
-  // Add a page
-  $pdf->AddPage();
-
-  // Set some content to print
-  $html ='
-  <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>Ciudad:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>Listado de reportes</b><br>Exportado: ' .$final_date. '</p>
-  <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
-  <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>ID</b></th>
-  <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>FECHA</b></th>
-  <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>CREADO POR</b></th></tr>';
+  $html = '
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <link href="https://fonts.googleapis.com/css?family=Heebo" rel="stylesheet">
+    </head>
+    <body>
+        <table class="head">
+          <thead>
+            <tr>
+                <th width="30%" class="slogan">
+                  <img width="120px" src="images/slogan-blue.jpg">
+                </th>
+                <th width="70%" class="txt-church">
+                    <b>' .$church_name. '</b>
+                    <p>' .$church_city. '</p>
+                </th>
+                <th class="img-church">
+                  <img width="30px" src="images/irest-photo.png">
+                </th>
+            </tr>
+          </thead>
+        </table>
+  
+        <div class="content-title">
+            <h3>Reportes de Células</h3>
+            <p>Exportado: ' .$final_date. '</p>
+        </div>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th width="15%">N.</th>
+                    <th width="25%">ID</th>
+                    <th width="30%">Fecha</th>
+                    <th width="30%">Creado por</th>
+                </tr>
+            </thead>
+            <tbody>';
+  
+  $i=0;
 
   foreach ($con->query($sql) as $row) {
-    if ($row['leader'] == ' ') {
-      $row['leader'] = '--';
+
+    if ($row['is_complete'] == 0 && $i==0){
+      $html.='';
+  }else{
+
+      $i++;
+      setlocale(LC_ALL, "es_ES");
+
+      if ($row['leader'] == '') {
+        $row['leader'] = '--';
+      }
+      if ($row['date'] == null) {
+        $newDate = '--';
+      }else{
+        $myDateTime = DateTime::createFromFormat('Y-m-d', $row['date']);
+        // $newDate = $myDateTime->format('M. j, Y');
+        $newDate = strftime("%b %e, %Y", $myDateTime->getTimestamp());
+      }
+      if ($row['name'] == null) {
+        $row['name'] = '--';
+      }
+      $html.='
+          <tr>
+            <td>' . $i . '</td>
+            <td>' . $row['name'] . '</td>
+            <td>' . $newDate . '</td>
+            <td>' . $row['leader'] . '</td>
+          </tr>';
     }
-    if ($row['date'] == null) {
-      $row['date'] = '--';
-    }
-    if ($row['name'] == null) {
-      $row['name'] = '--';
-    }
-    $html.='
-        <tr>
-          <td style="height: 30px;">' . $row['name'] . '</td>
-          <td style="height: 30px;">' . $row['date'] . '</td>
-          <td style="height: 30px;">' . $row['leader'] . '</td>
-        </tr>';
   }
-  $html.='</table>';
+  $html.='
+        </tbody>
+      </table>
+    </body>
+  </html>';
 
-  // Print text using writeHTML
-  $pdf->writeHTML($html, true, false, false, false, '');
+  $mpdf = new \Mpdf\Mpdf([
+    'mode' => 'utf-8',
+    'margin_left' => 13,
+    'margin_right' => 13,
+    'margin_top' => 10,
+    'margin_bottom' => 15,
+    'margin_header' => 15,
+    'margin_footer' => 5,
+    'pagenumPrefix' => '',
+    'pagenumSuffix' => '',
+    'nbpgPrefix' => ' de ',
+    'nbpgSuffix' => ''
+  ]);
 
-  // Close and output PDF document
-  $pdf->Output('listado_reportes.pdf', 'D');
+  $mpdf->SetCreator('C+');
+  $mpdf->SetAuthor('C+');
+  $mpdf->SetTitle('Listado de reportes');
+  $mpdf->SetSubject('Listado de reportes');
+
+  $mpdf->SetHTMLFooter('
+  <table width="100%">
+      <tr>
+          <td width="33.33333%"></td>
+          <td width="33.33333%" align="center"></td>
+          <td width="33.33333%" style="text-align: right; color: #6C6D70; font-size: 11px;">{PAGENO}{nbpg}</td>
+      </tr>
+  </table>');
+
+  // Load a stylesheet
+  $stylesheet = file_get_contents('assets/css/pdf-style.css');
+  $mpdf->WriteHTML($stylesheet, 1);
+  $mpdf->WriteHTML($html);
+  $mpdf->Output('Listado de reportes '.$o_date.'.pdf','D');
 
  }
  catch(\Exception $ex){
@@ -60826,6 +59599,386 @@ $app->post('/download/report-list', function ($request,$response) {
                 "status"=>422)),422);
  }
 
+});
+
+$app->post('/download/report', function ($request,$response) {
+
+  try{
+     $con = $this->db;
+     $report_id = $request->getParam('report_id');
+     $cell_id = $request->getParam('cell_id');
+
+     if(empty($cell_id)){
+       return $response->withStatus(422)
+               ->withHeader('Content-Type', 'application/json')
+               ->withJson(array('error' => array(
+                 "message"=>"Missing parameter: id de célula",
+                 "status"=>422)));
+     } else if(empty($report_id)){
+       return $response->withStatus(422)
+               ->withHeader('Content-Type', 'application/json')
+               ->withJson(array('error' => array(
+                 "message"=>"Missing parameter: id de reporte",
+                 "status"=>422)));
+    }
+
+
+    $pre_ini = $con->prepare("SELECT * FROM reports WHERE id = :report_id AND cell_id = :cell_id",  array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+    $values_ini = array(':report_id' => $report_id,':cell_id' => $cell_id);
+    $pre_ini->execute($values_ini);
+    $result_ini = $pre_ini->fetch();
+
+    if ($result_ini) {
+
+      $pre_i = $con->prepare("SELECT reports.name, reports.creation_date, reports.donations_offering, reports.donations_events, reports.donations_transport, reports.total_member_assistance, reports.total_kids_assistance, reports.total_guest_assistance, reports.total_doctrine, reports.total_celebration, reports.total_salvation, reports.total_baptized, reports.total_schedule_visits, reports.district_code, reports.zone_code, reports.sector_code, reports.cell_code, groups_cells.church_id FROM reports INNER JOIN groups_cells ON reports.cell_id = groups_cells.id WHERE reports.id = :report_id AND reports.cell_id = :cell_id",  array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+      $values_i = array(':report_id' => $report_id,':cell_id' => $cell_id);
+      $pre_i->execute($values_i);
+      $result_i = $pre_i->fetch();
+
+      $church_id = $result_i['church_id'];
+
+      /*obtain church name and city*/
+      $pre_ch = $con->prepare("SELECT *
+                               FROM churches
+                               WHERE id = :church_id", 
+                               array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+      $values_ch = array(':church_id' => $church_id);
+      $pre_ch->execute($values_ch);
+      $result_ch = $pre_ch->fetch();
+
+      $church_name = $result_ch['name'];
+      $church_city = $result_ch['city'];
+
+      $final_date = date("Y-m-d H:i:s");
+
+      /*obtain cell codes*/
+      if ($result_i['district_code'] && $result_i['zone_code'] && $result_i['sector_code'] && $result_i['cell_code']) {
+        $final_cell = 'D'. $result_i['district_code'] . ' Z'. $result_i['zone_code'] . ' S'. $result_i['sector_code'] . ' C'. $result_i['cell_code'] ;
+      } else if ($result_i['zone_code'] && $result_i['sector_code'] && $result_i['cell_code']) {
+        $final_cell = ' Z'. $result_i['zone_code'] . ' S'. $result_i['sector_code'] . ' C'. $result_i['cell_code'] ;
+      } else if ($result_i['sector_code'] && $result_i['cell_code']) {
+        $final_cell = ' S'. $result_i['sector_code'] . ' C'. $result_i['cell_code'] ;
+      } else if ($result_i['cell_code']) {
+        $final_cell = ' C'. $result_i['cell_code'] ;
+      }
+
+      // obtain year, quarterly, week
+      $exp = explode("Q", $result_i['name']);
+      $year = $exp[0];
+      $exp2 = explode("W", $exp[1]);
+      $quar = $exp2[0];
+      $week = $exp2[1];
+
+      $myDateTime = DateTime::createFromFormat('Y-m-d', $result_i['creation_date']);
+      setlocale(LC_ALL, "es_ES");
+      $newDate = strftime("%b %e, %Y", $myDateTime->getTimestamp());
+
+      // Obtain totals in report
+      $cell_at = $result_i['total_member_assistance'] + $result_i['total_kids_assistance'] + $result_i['total_guest_assistance'];
+      $church_at = $result_i['total_doctrine'] + $result_i['total_celebration'];
+      $performance = $result_i['total_salvation'] + $result_i['total_baptized'] + $result_i['total_schedule_visits'];
+      $donations = number_format($result_i['donations_offering'] + $result_i['donations_transport'] + $result_i['donations_events'],2);
+
+
+      /* Create new PDF document */
+      $html = '
+      <html>
+      <head>
+          <meta charset="utf-8">
+          <link href="https://fonts.googleapis.com/css?family=Heebo" rel="stylesheet">
+      </head>
+      <body>
+          <table class="head">
+            <thead>
+              <tr>
+                  <th width="30%" class="slogan">
+                    <img width="120px" src="images/slogan-blue.jpg">
+                  </th>
+                  <th width="70%" class="txt-church">
+                      <b>' .$church_name. '</b>
+                      <p>' .$church_city. '</p>
+                  </th>
+                  <th class="img-church">
+                    <img width="30px" src="images/irest-photo.png">
+                  </th>
+              </tr>
+            </thead>
+          </table>
+    
+          <div class="content-title">
+              <h3>Reporte '.$result_i['name'].'</h3>
+              <p>Exportado: ' .$final_date. '</p>
+          </div>
+          <table class="only" style="width: 100%; font-size: 12px;" cellspacing="0" cellpadding="10">
+            <tr>
+              <th width="33.33333%" style="border-bottom: 1px solid #D1D2D4; height: 20px; text-align: left; padding-left: 0;">Información general</th>
+              <th width="33.33333%" style="border-bottom: 1px solid #D1D2D4; height: 20px;"></th>
+              <th width="33.33333%" style="border-bottom: 1px solid #D1D2D4; height: 20px;"></th>
+            </tr>
+            <tr>
+              <td style="height: 30px; padding-left: 0; color: #6C6D70; padding-top: 20px;"><b>ID de Célula: </b>'.$final_cell.'</td>
+              <td style="height: 30px; padding-left: 0; color: #6C6D70; padding-top: 20px;"><b>Año: </b>'.$year.'</td>
+            </tr>
+            <tr>
+              <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Creado por: </b>'.$result_i['creation_date'].'</td>
+              <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Trimestre: </b>'.$quar.'</td>
+            </tr>
+            <tr>
+              <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Fecha:</b> '.$newDate.'</td>
+              <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Semana: </b> '.$week.'</td>
+            </tr>
+          </table>
+          <table class="only" style="width: 100%; font-size: 12px;" cellspacing="0" cellpadding="10">
+          <tr>
+            <th width="33.33333%" style="border-bottom: 1px solid #D1D2D4; height: 20px; text-align: left; padding-left: 0;">Asistencia a Célula: '.$cell_at.'</th>
+            <th width="33.33333%" style="border-bottom: 1px solid #D1D2D4; height: 20px; text-align: left; padding-left: 0;">Asistencia a Iglesia: '.$church_at.'</th>
+            <th width="33.33333%" style="border-bottom: 1px solid #D1D2D4; height: 20px; text-align: left; padding-left: 0;">Rendimiento: '.$performance.'</th>
+          </tr>
+          <tr>
+            <td style="height: 30px; padding-left: 0; color: #6C6D70; padding-top: 20px;"><b>Miembros: </b> '.$result_i['total_member_assistance'].'</td>
+            <td style="height: 30px; padding-left: 0; color: #6C6D70; padding-top: 20px;"><b>Doctrina:</b> '.$result_i['total_doctrine'].'</td>
+            <td style="height: 30px; padding-left: 0; color: #6C6D70; padding-top: 20px;"><b>Conversión:</b> '.$result_i['total_salvation'].'</td>
+          </tr>
+          <tr>
+            <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Niños:</b> '.$result_i['total_kids_assistance'].'</td>
+            <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Celebración:</b> '.$result_i['total_celebration'].'</td>
+            <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Bautismo:</b> '.$result_i['total_baptized'].'</td>
+          </tr>
+          <tr>
+            <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Invitados:</b> '.$result_i['total_guest_assistance'].'</td>
+            <td style="height: 30px; padding-left: 0; color: #6C6D70;"></td>
+            <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Visitas programadas:</b> '.$result_i['total_schedule_visits'].'</td>
+          </tr>
+          </table>
+          <table class="only" style="width: 100%; font-size: 12px;" cellspacing="0" cellpadding="10">
+            <tr>
+              <th width="100%" style="border-bottom: 1px solid #D1D2D4; height: 20px; text-align: left; padding-left: 0;">Donaciones: $'.$donations.'</th>
+            </tr>
+            <tr>
+              <td style="height: 30px; padding-left: 0; color: #6C6D70; padding-top: 20px;"><b>Ofrenda:</b> $'.$result_i['donations_offering'].'</td>
+            </tr>
+            <tr>
+              <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Eventos:</b> $'.$result_i['donations_events'].'</td>
+            </tr>
+            <tr>
+              <td style="height: 30px; padding-left: 0; color: #6C6D70;"><b>Templo:</b> $'.$result_i['donations_transport'].'</td>
+            </tr>
+          </table>
+      </body>
+      </html>';
+
+      $mpdf = new \Mpdf\Mpdf([
+        'mode' => 'utf-8',
+        'margin_left' => 13,
+        'margin_right' => 13,
+        'margin_top' => 10,
+        'margin_bottom' => 15,
+        'margin_header' => 15,
+        'margin_footer' => 5
+      ]);
+    
+      $mpdf->SetCreator('C+');
+      $mpdf->SetAuthor('C+');
+      $mpdf->SetTitle('Reporte '.$result_i['name'] .'');
+      $mpdf->SetSubject('Reporte '.$result_i['name'] .'');
+    
+      // Load a stylesheet
+      $stylesheet = file_get_contents('assets/css/pdf-style.css');
+      $mpdf->WriteHTML($stylesheet, 1);
+      $mpdf->WriteHTML($html);
+      $mpdf->Output('Reporte '.$result_i['name'] .'.pdf','D');
+
+    }else{
+      return $response->withStatus(422)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('error' => array(
+                  "message"=>"El reporte no existe en esta célula",
+                  "status"=>422)));
+    }
+
+
+ }
+ catch(\Exception $ex){
+   return $response->withJson(array('error' => array(
+                "message"=> $ex->getMessage(),
+                "status"=>422)),422);
+ }
+
+});
+
+$app->get('/download-test', function ($request,$response) {
+
+  $html = '
+  <html>
+  <head>
+      <meta charset="utf-8">
+      <link href="https://fonts.googleapis.com/css?family=Heebo" rel="stylesheet">
+      <style type="text/css">
+        body{
+          font-family: "Heebo", sans-serif;
+          font-size: 14px;
+        }
+        p{
+          margin: 0;
+        }
+        .content-title{
+          margin-top: 20px;
+        }
+        .content-title h3{
+          margin-bottom: 0;
+          color: #6C6D70;
+        }
+        .content-title p{
+          margin: 0;
+          color: #A8A9AD;
+          font-weight: bold;
+          font-size: 10px;
+        }
+        .head {
+    	    width: 100%;
+    	    max-width: 100%;
+    	    margin-bottom: 0;
+    	    background-color: transparent;
+    	    border-spacing: 0;
+    	    border-collapse: collapse;
+        }
+        .head thead tr th.slogan{
+          text-align: left;
+        }
+        .head thead tr th.txt-church{
+          text-align: right;
+          padding-top: 2px;
+          font-size: 8px;
+          color: #6C6D70;
+          font-weight: 100;
+        }
+        .head thead tr th.img-church{
+          padding-left: 10px;
+          text-align: right;
+        }
+        .table {
+          width: 100%;
+          max-width: 100%;
+          margin-bottom: 0;
+          background-color: transparent;
+          border-spacing: 0;
+          border-collapse: collapse;
+          font-size: 11px;
+          margin-top: 25px;
+        }
+        .table th{
+          text-align: left;
+          font-weight: bold;
+        }
+        .table thead tr th {
+          vertical-align: bottom;
+          border-bottom: 1px solid #DFE0E1;
+          padding: 6px;
+          line-height: 1.42857143;
+          font-size: 12px;
+        }
+        .table tbody tr:nth-child(1) td{
+          padding-top: 20px;
+        }
+        .table tbody tr td{
+          padding: 6px;
+          line-height: 1.42857143;
+          vertical-align: top;
+          color: #6C6D70;
+        }
+      </style>
+  </head>
+  <body>
+      <table class="head">
+        <thead>
+          <tr>
+              <th width="30%" class="slogan">
+                <img width="120px" src="images/slogan-blue.jpg">
+              </th>
+              <th width="70%" class="txt-church">
+                  <b>iRest</b>
+                  <p>Reseda, CA</p>
+              </th>
+              <th class="img-church">
+                <img width="30px" src="images/irest-photo.png">
+              </th>
+          </tr>
+        </thead>
+      </table>
+
+      <div class="content-title">
+          <h3>Reportes de Células</h3>
+          <p>Exportado: 2019-01-27 11:08:20</p>
+      </div>
+      <table class="table">
+          <thead>
+              <tr>
+                  <th width="15%">N.</th>
+                  <th width="25%">ID</th>
+                  <th width="30%">Fecha</th>
+                  <th width="30%">Creado por</th>
+              </tr>
+          </thead>
+          <tbody>
+              <tr>
+                  <td>1</td>
+                  <td>0121-2019-3-12</td>
+                  <td>Sept. 21, 2019</td>
+                  <td>Elmer Dubón</td>
+              </tr>
+              <tr>
+                  <td>2</td>
+                  <td>0125-2019-3-11</td>
+                  <td>Sept. 14, 2019</td>
+                  <td>Isaias Sánchez</td>
+              </tr>
+              <tr>
+                  <td>2</td>
+                  <td>0123-2019-3-10</td>
+                  <td>Ago. 28, 2019</td>
+                  <td>Gracia Alvarado</td>
+              </tr>
+          </tbody>
+      </table>
+  </body>
+  </html>';
+  
+  $mpdf = new \Mpdf\Mpdf([
+    'mode' => 'utf-8',
+    'margin_left' => 13,
+    'margin_right' => 13,
+    'margin_top' => 10,
+    'margin_bottom' => 15,
+    'margin_header' => 15,
+    'margin_footer' => 5,
+    'pagenumPrefix' => '',
+    'pagenumSuffix' => '',
+    'nbpgPrefix' => ' de ',
+    'nbpgSuffix' => ''
+  ]);
+
+  $mpdf->SetCreator('C+');
+  $mpdf->SetAuthor('C+');
+  $mpdf->SetTitle('Listado de reportes');
+  $mpdf->SetSubject('Listado de reportes');
+
+  $mpdf->SetHTMLFooter('
+  <table width="100%">
+      <tr>
+          <td width="33.33333%"></td>
+          <td width="33.33333%" align="center"></td>
+          <td width="33.33333%" style="text-align: right; color: #6C6D70; font-size: 11px;">{PAGENO}{nbpg}</td>
+      </tr>
+  </table>');
+
+  // Load a stylesheet
+  $stylesheet = file_get_contents('assets/css/pdf-style.css');
+  $mpdf->WriteHTML($stylesheet, 1);
+  $mpdf->WriteHTML($html);
+  $mpdf->Output('listado_reportes.pdf','D');
 });
 
 // report details
@@ -60840,33 +59993,33 @@ $app->get('/reports/detail', function ($request,$response) {
    $report_id = $request->getParam('report_id');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($report_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: report_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de reporte",
+               "status"=>422)));
    }
 
   $pre_i = $con->prepare("SELECT *
@@ -61080,110 +60233,110 @@ $app->put('/reports/edit', function ($request,$response) {
    $impersonate_role = $request->getParam('impersonate_role');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($report_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: report_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de reporte",
+               "status"=>422)));
    } else if(!is_numeric($donations_offering)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: donations_offering",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: donaciones de ofrenda",
+               "status"=>422)));
    } else if(!is_numeric($donations_events)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: donations_events",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: donaciones de eventos",
+               "status"=>422)));
    } else if(!is_numeric($donations_transport)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: donations_transport",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: donaciones de transporte",
+               "status"=>422)));
    }else if(!preg_match("/^[0-9]+$/i", $total_member_assistance)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: total_member_assistance",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: asistencia total de miembros",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $total_kids_assistance)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: total_kids_assistance",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: asistencia total de niños",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $total_guest_assistance)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: total_guest_assistance",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: asistencia total de invitados",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $total_doctrine)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: total_doctrine",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: total de doctrina",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $total_celebration)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: total_celebration",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: total de celebración",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $total_salvation)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: total_salvation",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: total de salvación",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $total_baptized)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: total_baptized",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: total de bautizo",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $total_schedule_visits)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: total_schedule_visits",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: total de visitas programadas",
+               "status"=>422)));
    }
 
    // Validate role (only leader, senior pastor, admin, owner)
@@ -61299,26 +60452,26 @@ $app->put('/reports/edit', function ($request,$response) {
    if ($impersonate) {
      
      if ($impersonate != '1') {
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"impersonate_not_valid",
-                 "message"=>"Parámetro impersonate no es válido",
-                 "status"=>500)));
+                 "message"=>"Parámetro impersonado no es válido",
+                 "status"=>422)));
      }else if(empty($impersonate_id)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: impersonate_id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id de impersonado",
+                "status"=>422)));
     } else if(empty($impersonate_role)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required",
-                "message"=>"Parámetro faltante: impersonate_role",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: rol de impersonado",
+                "status"=>422)));
     }
 
     $pre_imper = $con->prepare("SELECT * FROM user WHERE id = :impersonate_id AND rol = :impersonate_role AND church_id = :church_id AND status = '1' AND verified_account = '1'", 
@@ -61370,44 +60523,44 @@ $app->put('/reports/edit', function ($request,$response) {
     }
 
     if($err_member > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_member_id",
-                "message"=>"Parámetro faltante: id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id de miembro",
+                "status"=>422)));
 
     } else if($err_role > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_member_role",
-                "message"=>"Parámetro faltante: role",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: rol de miembro",
+                "status"=>422)));
 
     } else if($err_cell > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_member_cell",
-                "message"=>"Parámetro faltante: cell group",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: célula de miembro",
+                "status"=>422)));
 
     } else if($err_doctrine > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_member_doctrine",
-                "message"=>"Parámetro faltante: doctrine",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: doctrina de miembro",
+                "status"=>422)));
 
     } else if($err_celebration > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_member_celebrate",
-                "message"=>"Parámetro faltante: celebration",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: celebración de miembro",
+                "status"=>422)));
 
     }
    }
@@ -61437,44 +60590,44 @@ $app->put('/reports/edit', function ($request,$response) {
     }
 
     if($err_member > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_guest_id",
-                "message"=>"Parámetro faltante: id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id de invitado",
+                "status"=>422)));
 
     } else if($err_role > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_guest_role",
-                "message"=>"Parámetro faltante: role",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: rol de invitado",
+                "status"=>422)));
 
     } else if($err_cell > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_guest_cell",
-                "message"=>"Parámetro faltante: cell group",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: célula de invitado",
+                "status"=>422)));
 
     } else if($err_doctrine > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_guest_doctrine",
-                "message"=>"Parámetro faltante: doctrine",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: doctrina de invitado",
+                "status"=>422)));
 
     } else if($err_celebration > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_guest_celebrate",
-                "message"=>"Parámetro faltante: celebration",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: celebración de invitado",
+                "status"=>422)));
 
     }
    }
@@ -61498,28 +60651,28 @@ $app->put('/reports/edit', function ($request,$response) {
     }
 
     if($err_member > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_salvation_id",
-                "message"=>"Parámetro faltante: id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id de miembro",
+                "status"=>422)));
 
     } else if($err_role > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_salvation_role",
-                "message"=>"Parámetro faltante: role",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: rol de miembro",
+                "status"=>422)));
 
     } else if($err_salva > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_salvation",
-                "message"=>"Parámetro faltante: salvations",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: salvaciones",
+                "status"=>422)));
 
     }
    }
@@ -61543,28 +60696,28 @@ $app->put('/reports/edit', function ($request,$response) {
     }
 
     if($err_member > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_baptized_id",
-                "message"=>"Parámetro faltante: id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id de miembro",
+                "status"=>422)));
 
     } else if($err_role > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_baptized_role",
-                "message"=>"Parámetro faltante: role",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: rol de miembro",
+                "status"=>422)));
 
     } else if($err_baptized > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_baptized",
-                "message"=>"Parámetro faltante: baptized",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: bautizados",
+                "status"=>422)));
 
     }
    }
@@ -61588,28 +60741,28 @@ $app->put('/reports/edit', function ($request,$response) {
     }
 
     if($err_member > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_visits_id",
-                "message"=>"Parámetro faltante: id",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: id de miembro",
+                "status"=>422)));
 
     } else if($err_role > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_visits_role",
-                "message"=>"Parámetro faltante: role",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: rol de miembro",
+                "status"=>422)));
 
     } else if($err_visits > 0){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                 "type"=>"required_visits",
-                "message"=>"Parámetro faltante: scheduled visits",
-                "status"=>500)));
+                "message"=>"Parámetro faltante: visitas programadas",
+                "status"=>422)));
 
     }
    }
@@ -61630,6 +60783,7 @@ $app->put('/reports/edit', function ($request,$response) {
                           total_schedule_visits = :total_schedule_visits,
                           is_complete = '1',
                           creation_date = :actual_d,
+                          created_by = :user_id,
                           updated_at = :updated_at
                           WHERE id = :report_id", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
@@ -61645,6 +60799,7 @@ $app->put('/reports/edit', function ($request,$response) {
      ':total_salvation' => $total_salvation,
      ':total_baptized' => $total_baptized,
      ':total_schedule_visits' => $total_schedule_visits,
+     ':user_id' => $user_id,
      ':report_id' => $report_id,
      ':updated_at' => $final_d,
      ':actual_d' => $actual_d
@@ -61937,26 +61092,26 @@ $app->get('/members/guests/list', function ($request,$response) {
    $filter_cell = $request->getParam('filter_cell');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: user_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: role_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: church_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: id de iglesia",
+               "status"=>422)));
    }
 
 
@@ -62008,12 +61163,12 @@ $app->get('/members/guests/list', function ($request,$response) {
   }else if ($role_id == '2') {
 
     if(empty($parent_id)){
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                  ->withHeader('Content-Type', 'application/json')
                  ->withJson(array('error' => array(
                    "type"=>"required",
-                   "message"=>"Missing parameter: parent_id",
-                   "status"=>500)));
+                   "message"=>"Missing parameter: id padre",
+                   "status"=>422)));
     }
 
     /*if select filter list*/
@@ -62037,12 +61192,12 @@ $app->get('/members/guests/list', function ($request,$response) {
   } else if ($role_id == '3') {
 
     if(empty($parent_id)){
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                  ->withHeader('Content-Type', 'application/json')
                  ->withJson(array('error' => array(
                    "type"=>"required",
-                   "message"=>"Missing parameter: parent_id",
-                   "status"=>500)));
+                   "message"=>"Missing parameter: id padre",
+                   "status"=>422)));
     }
 
     /*if select filter list*/
@@ -62062,12 +61217,12 @@ $app->get('/members/guests/list', function ($request,$response) {
   } else if ($role_id == '4') {
     
     if(empty($parent_id)){
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                  ->withHeader('Content-Type', 'application/json')
                  ->withJson(array('error' => array(
                    "type"=>"required",
-                   "message"=>"Missing parameter: parent_id",
-                   "status"=>500)));
+                   "message"=>"Missing parameter: id padre",
+                   "status"=>422)));
     }
 
     /*if select filter list*/
@@ -62084,12 +61239,12 @@ $app->get('/members/guests/list', function ($request,$response) {
   } else if ($role_id == '5') {
 
     if(empty($parent_id)){
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                  ->withHeader('Content-Type', 'application/json')
                  ->withJson(array('error' => array(
                    "type"=>"required",
-                   "message"=>"Missing parameter: parent_id",
-                   "status"=>500)));
+                   "message"=>"Missing parameter: id padre",
+                   "status"=>422)));
     }
       
     $sql = "SELECT members_cells.id as member_id, members_cells.first_name, members_cells.last_name, CONCAT(IFNULL(members_cells.first_name,''),' ',IFNULL(members_cells.last_name,'')) AS full_name, members_cells.profile_picture, members_cells.city, groups_cells.district_code, groups_cells.zone_code, groups_cells.sector_code, groups_cells.cell_code, members_cells.is_complete, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_cells, members_cells WHERE members_cells.cell_id = groups_cells.id AND groups_cells.id = $parent_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1";
@@ -62101,7 +61256,7 @@ $app->get('/members/guests/list', function ($request,$response) {
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                   "type"=>"role_doesnt_exist",
-                  "message"=>"Role does not exist",
+                  "message"=>"Rol no existe",
                   "status"=>422)));
   }
 
@@ -62176,73 +61331,65 @@ $app->post('/members/guests/add', function ($request,$response) {
    $valid_guest = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$guest_since);
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: user_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: role_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: rol de usuario",
+               "status"=>422)));
    } else if(empty($cell_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: cell_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: id de célula",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: church_id",
-               "status"=>500)));
-   } else if(empty($email)){
-     return $response->withStatus(500)
-             ->withHeader('Content-Type', 'application/json')
-             ->withJson(array('error' => array(
-               "type"=>"required",
-               "message"=>"Missing parameter: email",
-               "status"=>500)));
+               "message"=>"Missing parameter: id de iglesia",
+               "status"=>422)));
    } else if(empty($first_name)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: first_name",
-               "status"=>500)));
+               "message"=>"Missing parameter: nombre",
+               "status"=>422)));
     } else if(empty($last_name)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: last_name",
-               "status"=>500)));
+               "message"=>"Missing parameter: apellido",
+               "status"=>422)));
     } else if(empty($birth_date)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: birth_date",
-               "status"=>500)));
-     } else if(empty($valid_guest)){
-      return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                       ->withJson(array('error' => array(
-                         "type"=>"required",
-                          "message"=>"Missing parameter: valid_guest",
-                          "status"=>500)));
+               "message"=>"Missing parameter: fecha de nacimiento",
+               "status"=>422)));
+     } else if(empty($guest_since)){
+      return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+                "type"=>"required",
+                "message"=>"Missing parameter: invitado desde",
+                "status"=>422)));
     }
 
     // Validations depending on the parameters sent
     if($gender){
-
      if($gender != 'm' && $gender != 'f'){
        return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
@@ -62251,10 +61398,8 @@ $app->post('/members/guests/add', function ($request,$response) {
                  "message"=>"Debe ingresar un género válido",
                  "status"=>422)));
      }
-
     }
     if($birth_date){
-
        if(!$valid_birthdate){
         return $response->withStatus(422)
                 ->withHeader('Content-Type', 'application/json')
@@ -62263,10 +61408,8 @@ $app->post('/members/guests/add', function ($request,$response) {
                   "message"=>"Debes ingresar una fecha de nacimiento válida.",
                   "status"=>422)));
        }
-
     }
     if($marital_status){
-
      if($marital_status != 'M' && $marital_status != 'S'){
        return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
@@ -62275,7 +61418,6 @@ $app->post('/members/guests/add', function ($request,$response) {
                  "message"=>"Debe ingresar un estado civil válido",
                  "status"=>422)));
      }
-
     } 
     if($married_since){
        if(!$valid_married){
@@ -62296,7 +61438,17 @@ $app->post('/members/guests/add', function ($request,$response) {
                   "message"=>"Debes ingresar una fecha de invitado válida",
                   "status"=>422)));
        }
-    }
+    }     
+    if ($email) {
+      if(!$valid_email){
+       return $response->withStatus(422)
+               ->withHeader('Content-Type', 'application/json')
+               ->withJson(array('error' => array(
+                 "type" => "valid_email",
+                 "message"=>"Debes ingresar un correo electrónico válido",
+                 "status"=>422)));
+      }
+   } 
 
     /*Impersonate*/
     if ($impersonate) {
@@ -62306,22 +61458,22 @@ $app->post('/members/guests/add', function ($request,$response) {
                 ->withHeader('Content-Type', 'application/json')
                 ->withJson(array('error' => array(
                   "type"=>"impersonate_not_valid",
-                  "message"=>"Parámetro impersonate no es válido",
+                  "message"=>"Parámetro impersonado no es válido",
                   "status"=>422)));
       }else if(empty($impersonate_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: impersonate_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: id impersonado",
+                 "status"=>422)));
      } else if(empty($impersonate_role)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: impersonate_role",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: rol impersonado",
+                 "status"=>422)));
      }
 
       $pre_imper = $con->prepare("SELECT * FROM user WHERE id = :impersonate_id AND rol = :impersonate_role AND church_id = :church_id AND status = '1' AND verified_account = '1'", 
@@ -62454,8 +61606,59 @@ $app->post('/members/guests/add', function ($request,$response) {
 
     $final_date = date("Y-m-d H:i:s");
 
+    // Obtain latitude and longitude of group cell
+    $final_ad = urlencode($address);
+    $final_city = urlencode($city);
+    $geo = $final_ad . ',+' . $final_city;
+
+    $latitude = null;
+    $longitude = null;
+    $latitude_delta = null;
+    $longitude_delta = null;
+
+    if ($address || $city) {
+      $url = "https://maps.googleapis.com/maps/api/geocode/json?address=$geo&key=AIzaSyBF-rxaBu86zHTWlFMketjgJaftZ3HR9YU";
+
+      $ch = curl_init();
+
+      curl_setopt($ch,CURLOPT_URL, $url);
+      curl_setopt($ch,CURLOPT_RETURNTRANSFER, true);
+      curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+      $result_map = curl_exec($ch);
+
+      curl_close($ch);
+
+      if ($result_map) {
+        $data = json_decode($result_map);
+
+        if($data->status == "OK"){
+            $lat = $data->results[0]->geometry->location->lat;
+            $lng = $data->results[0]->geometry->location->lng;
+
+            // latitude delta
+            $lat_nth = $data->results[0]->geometry->viewport->northeast->lat;
+            $lng_sth = $data->results[0]->geometry->viewport->southwest->lat;
+            $diff = $lat_nth - $lng_sth;
+
+            // longitude delta
+            $lat_nth2 = $data->results[0]->geometry->viewport->northeast->lng;
+            $lng_sth2 = $data->results[0]->geometry->viewport->southwest->lng;
+            $diff2 = $lat_nth2 - $lng_sth2;
+
+            // adding values
+            $latitude = $lat;
+            $longitude = $lng;
+            $latitude_delta = $diff;
+            $longitude_delta = $diff2;
+        }
+
+      }
+
+    }
+
     /*insert member*/
-    $pre = $con->prepare("INSERT INTO members_cells (`cell_id`, `church_id`, `first_name`,`last_name`,`email`,`phone`,`profile_picture`,`address`,`postal_code`,`city`,`gender`,`birth_date`,`marital_status`,`married_since`,`guest_since`,`exelerate_id`,`member_since`,`role`,`active`,`is_complete`,`block`,`created_at`, `updated_at`) VALUES (:cell_id, :church_id,:first_name,:last_name,:email,:phone,:profile_picture,:address,:postal_code,:city,:gender,:birth_date,:marital_status,:married_since,:guest_since,NULL,NULL,'1','1','0','0','$final_date', '$final_date')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+    $pre = $con->prepare("INSERT INTO members_cells (`cell_id`, `church_id`, `first_name`,`last_name`,`email`,`phone`,`profile_picture`,`address`,`latitude`,`longitude`,`latitude_delta`,`longitude_delta`,`postal_code`,`city`,`gender`,`birth_date`,`marital_status`,`married_since`,`guest_since`,`exelerate_id`,`member_since`,`role`,`active`,`is_complete`,`block`,`created_at`, `updated_at`) VALUES (:cell_id, :church_id,:first_name,:last_name,:email,:phone,:profile_picture,:address,:latitude,:longitude,:latitude_delta,:longitude_delta,:postal_code,:city,:gender,:birth_date,:marital_status,:married_since,:guest_since,NULL,NULL,'1','1','0','0','$final_date', '$final_date')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
     $values = array(
         ':cell_id' => $cell_id, 
@@ -62466,6 +61669,10 @@ $app->post('/members/guests/add', function ($request,$response) {
         ':phone' => $phone,
         ':profile_picture' => $profile_picture,
         ':address' => $address,
+        ':latitude' => $latitude,
+        ':longitude' => $longitude,
+        ':latitude_delta' => $latitude_delta,
+        ':longitude_delta' => $longitude_delta,
         ':postal_code' => $postal_code,
         ':city' => $city,
         ':gender' => $gender,
@@ -62664,33 +61871,33 @@ $app->get('/members/guests/profile', function ($request,$response) {
    $guest_id = $request->getParam('guest_id');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($guest_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: guest_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de invitado",
+               "status"=>422)));
    } 
 
    /*verify if user exist*/
@@ -62731,7 +61938,7 @@ $app->get('/members/guests/profile', function ($request,$response) {
     }
 
     // General process
-    $pre = $con->prepare("SELECT id, cell_id, CONCAT(first_name, ' ', last_name) AS full_name, first_name, last_name, email, phone, profile_picture, address, postal_code, city, gender, birth_date, role, marital_status, married_since, guest_since, is_complete FROM members_cells WHERE id = :guest_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+    $pre = $con->prepare("SELECT id, cell_id, CONCAT(first_name, ' ', last_name) AS full_name, first_name, last_name, email, phone, profile_picture, address, latitude, longitude, latitude_delta, longitude_delta, postal_code, city, gender, birth_date, role, marital_status, married_since, guest_since, is_complete FROM members_cells WHERE id = :guest_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
     $values = array(':guest_id' => $guest_id);
     $pre->execute($values);
@@ -62785,6 +61992,10 @@ $app->get('/members/guests/profile', function ($request,$response) {
         "email" => $result['email'],
         "phone" => $result['phone'],
         "address" => $result['address'],
+        "latitude" => $result['latitude'],
+        "longitude" => $result['longitude'],
+        "latitude_delta" => $result['latitude_delta'],
+        "longitude_delta" => $result['longitude_delta'],
         "postal_code" => $result['postal_code'],
         "city" => $result['city'],
         "gender" => $result['gender'],
@@ -62859,54 +62070,54 @@ $app->put('/members/guests/edit', function ($request,$response) {
      $valid_guest = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$guest_since);
 
      if(empty($user_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: user_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: id de usuario",
+                 "status"=>422)));
      } else if(empty($role_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: role_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: rol de usuario",
+                 "status"=>422)));
      } else if(empty($church_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: church_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: id de iglesia",
+                 "status"=>422)));
      } else if(empty($guest_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: guest_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: id de invitado",
+                 "status"=>422)));
      } else if(empty($first_name)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: first_name",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: nombre",
+                 "status"=>422)));
       } else if(empty($last_name)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: last_name",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: apellido",
+                 "status"=>422)));
       } else if(empty($birth_date)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: birth_date",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: fecha de nacimiento",
+                 "status"=>422)));
       } else if(!$valid_birthdate){
          return $response->withStatus(422)
                  ->withHeader('Content-Type', 'application/json')
@@ -62915,12 +62126,12 @@ $app->put('/members/guests/edit', function ($request,$response) {
                    "message"=>"Debe ingresar una fecha de nacimiento válida.",
                    "status"=>422)));
       } else if(empty($guest_since)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: guest_since",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: invitado desde",
+                 "status"=>422)));
       } else if(!$valid_guest){
          return $response->withStatus(422)
                  ->withHeader('Content-Type', 'application/json')
@@ -62976,22 +62187,22 @@ $app->put('/members/guests/edit', function ($request,$response) {
                 ->withHeader('Content-Type', 'application/json')
                 ->withJson(array('error' => array(
                   "type"=>"impersonate_not_valid",
-                  "message"=>"Parámetro impersonate no es válido",
+                  "message"=>"Parámetro impersonado no es válido",
                   "status"=>422)));
       }else if(empty($impersonate_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: impersonate_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: id de impersonado",
+                 "status"=>422)));
      } else if(empty($impersonate_role)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: impersonate_role",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: rol de impersonado",
+                 "status"=>422)));
      }
 
       $pre_imper = $con->prepare("SELECT * FROM user WHERE id = :impersonate_id AND rol = :impersonate_role AND church_id = :church_id AND status = '1' AND verified_account = '1'", 
@@ -63094,11 +62305,66 @@ $app->put('/members/guests/edit', function ($request,$response) {
 
         $final_d = date("Y-m-d H:i:s");
 
+        // Obtain latitude and longitude of group cell
+        $final_ad = urlencode($address);
+        $final_city = urlencode($city);
+        $geo = $final_ad . ',+' . $final_city;
+
+        $latitude = null;
+        $longitude = null;
+        $latitude_delta = null;
+        $longitude_delta = null;
+
+        if ($address || $city) {
+          $url = "https://maps.googleapis.com/maps/api/geocode/json?address=$geo&key=AIzaSyBF-rxaBu86zHTWlFMketjgJaftZ3HR9YU";
+
+          $ch = curl_init();
+
+          curl_setopt($ch,CURLOPT_URL, $url);
+          curl_setopt($ch,CURLOPT_RETURNTRANSFER, true);
+          curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+          $result_map = curl_exec($ch);
+
+          curl_close($ch);
+
+          if ($result_map) {
+            $data = json_decode($result_map);
+
+            if($data->status == "OK"){
+                $lat = $data->results[0]->geometry->location->lat;
+                $lng = $data->results[0]->geometry->location->lng;
+
+                // latitude delta
+                $lat_nth = $data->results[0]->geometry->viewport->northeast->lat;
+                $lng_sth = $data->results[0]->geometry->viewport->southwest->lat;
+                $diff = $lat_nth - $lng_sth;
+
+                // longitude delta
+                $lat_nth2 = $data->results[0]->geometry->viewport->northeast->lng;
+                $lng_sth2 = $data->results[0]->geometry->viewport->southwest->lng;
+                $diff2 = $lat_nth2 - $lng_sth2;
+
+                // adding values
+                $latitude = $lat;
+                $longitude = $lng;
+                $latitude_delta = $diff;
+                $longitude_delta = $diff2;
+            }
+
+          }
+
+        }
+
         $pre = $con->prepare("UPDATE members_cells SET first_name = :first_name,
                                last_name = :last_name,
                                email = :email,
                                phone = :phone,
                                address = :address,
+                               latitude = :latitude,
+                               longitude = :longitude,
+                               latitude_delta = :latitude_delta,
+                               longitude_delta = :longitude_delta,
                                postal_code = :postal_code,
                                city = :city,
                                birth_date = :birth_date,
@@ -63119,6 +62385,10 @@ $app->put('/members/guests/edit', function ($request,$response) {
           ':profile_picture' => $profile_picture,
           ':phone' => $phone,
           ':address' => $address,
+          ':latitude' => $latitude,
+          ':longitude' => $longitude,
+          ':latitude_delta' => $latitude_delta,
+          ':longitude_delta' => $longitude_delta,
           ':postal_code' => $postal_code,
           ':city' => $city,
           ':birth_date' => $birth_date,
@@ -63258,33 +62528,33 @@ $app->post('/members/guests/promote', function ($request,$response) {
    $impersonate_role = $request->getParam('impersonate_role');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($guest_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: guest_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de invitado",
+               "status"=>422)));
    }
 
 
@@ -63296,22 +62566,22 @@ $app->post('/members/guests/promote', function ($request,$response) {
                 ->withHeader('Content-Type', 'application/json')
                 ->withJson(array('error' => array(
                   "type"=>"impersonate_not_valid",
-                  "message"=>"Parámetro impersonate no es válido",
+                  "message"=>"Parámetro impersonado no es válido",
                   "status"=>422)));
       }else if(empty($impersonate_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: impersonate_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: id impersonado",
+                 "status"=>422)));
      } else if(empty($impersonate_role)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: impersonate_role",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: rol impersonado",
+                 "status"=>422)));
      }
 
       $pre_imper = $con->prepare("SELECT * FROM user WHERE id = :impersonate_id AND rol = :impersonate_role AND church_id = :church_id AND status = '1' AND verified_account = '1'", 
@@ -63606,54 +62876,54 @@ $app->post('/members/guests/assign-steps', function ($request,$response) {
     $step_date = $request->getParam('step_date');
 
     if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($guest_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: guest id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de invitado",
+               "status"=>422)));
    } else if(empty($step_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: step id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de paso",
+               "status"=>422)));
    }else if(empty($step_name)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: step name",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: nombre del paso",
+               "status"=>422)));
    }else if(empty($step_date)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: step date",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: fecha del paso",
+               "status"=>422)));
    }
 
    $valid_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$step_date);
@@ -63885,26 +63155,26 @@ $app->get('/members/cell-members/list', function ($request,$response) {
    $filter_cell = $request->getParam('filter_cell');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: user_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: role_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: church_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: id de iglesia",
+               "status"=>422)));
    }
 
 
@@ -63956,12 +63226,12 @@ $app->get('/members/cell-members/list', function ($request,$response) {
   }else if ($role_id == '2') {
 
     if(empty($parent_id)){
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                  ->withHeader('Content-Type', 'application/json')
                  ->withJson(array('error' => array(
                    "type"=>"required",
-                   "message"=>"Missing parameter: parent_id",
-                   "status"=>500)));
+                   "message"=>"Missing parameter: id padre",
+                   "status"=>422)));
     }
 
     /*if select filter list*/
@@ -63985,12 +63255,12 @@ $app->get('/members/cell-members/list', function ($request,$response) {
   } else if ($role_id == '3') {
 
     if(empty($parent_id)){
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                  ->withHeader('Content-Type', 'application/json')
                  ->withJson(array('error' => array(
                    "type"=>"required",
-                   "message"=>"Missing parameter: parent_id",
-                   "status"=>500)));
+                   "message"=>"Missing parameter: id padre",
+                   "status"=>422)));
     }
 
     /*if select filter list*/
@@ -64010,12 +63280,12 @@ $app->get('/members/cell-members/list', function ($request,$response) {
   } else if ($role_id == '4') {
     
     if(empty($parent_id)){
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                  ->withHeader('Content-Type', 'application/json')
                  ->withJson(array('error' => array(
                    "type"=>"required",
-                   "message"=>"Missing parameter: parent_id",
-                   "status"=>500)));
+                   "message"=>"Missing parameter: id padre",
+                   "status"=>422)));
     }
 
     /*if select filter list*/
@@ -64032,12 +63302,12 @@ $app->get('/members/cell-members/list', function ($request,$response) {
   } else if ($role_id == '5') {
 
     if(empty($parent_id)){
-          return $response->withStatus(500)
+          return $response->withStatus(422)
                  ->withHeader('Content-Type', 'application/json')
                  ->withJson(array('error' => array(
                    "type"=>"required",
-                   "message"=>"Missing parameter: parent_id",
-                   "status"=>500)));
+                   "message"=>"Missing parameter: id padre",
+                   "status"=>422)));
     }
       
     $sql = "SELECT members_cells.id as member_id, members_cells.first_name, members_cells.last_name, CONCAT(IFNULL(members_cells.first_name,''),' ',IFNULL(members_cells.last_name,'')) AS full_name, members_cells.profile_picture, members_cells.city, groups_cells.district_code, groups_cells.zone_code, groups_cells.sector_code, groups_cells.cell_code, members_cells.is_complete, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_cells, members_cells WHERE members_cells.cell_id = groups_cells.id AND groups_cells.id = $parent_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1";
@@ -64049,7 +63319,7 @@ $app->get('/members/cell-members/list', function ($request,$response) {
               ->withHeader('Content-Type', 'application/json')
               ->withJson(array('error' => array(
                   "type"=>"role_doesnt_exist",
-                  "message"=>"Role does not exist",
+                  "message"=>"Rol no existe",
                   "status"=>422)));
   }
 
@@ -64112,124 +63382,124 @@ $app->post('/members/cell-members/add', function ($request,$response) {
    $valid_member = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$member_since);
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: user_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: role_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: rol de usuario",
+               "status"=>422)));
    } else if(empty($cell_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: cell_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: id de célula",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: church_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: id de iglesia",
+               "status"=>422)));
    } else if(empty($email)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: email",
-               "status"=>500)));
+               "message"=>"Missing parameter: correo electrónico",
+               "status"=>422)));
    } else if(empty($first_name)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: first_name",
-               "status"=>500)));
+               "message"=>"Missing parameter: nombre",
+               "status"=>422)));
     } else if(empty($last_name)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: last_name",
-               "status"=>500)));
+               "message"=>"Missing parameter: apellido",
+               "status"=>422)));
     } else if(empty($phone)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: phone",
-               "status"=>500)));
+               "message"=>"Missing parameter: teléfono",
+               "status"=>422)));
     } else if(empty($address)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: address",
-               "status"=>500)));
+               "message"=>"Missing parameter: dirección",
+               "status"=>422)));
     } else if(empty($city)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: city",
-               "status"=>500)));
+               "message"=>"Missing parameter: ciudad",
+               "status"=>422)));
     } else if(empty($postal_code)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: postal_code",
-               "status"=>500)));
+               "message"=>"Missing parameter: código postal",
+               "status"=>422)));
     } else if(empty($birth_date)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: birth_date",
-               "status"=>500)));
+               "message"=>"Missing parameter: fecha de nacimiento",
+               "status"=>422)));
      } else if(empty($gender)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: gender",
-               "status"=>500)));
+               "message"=>"Missing parameter: género",
+               "status"=>422)));
     } else if(empty($marital_status)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: marital_status",
-               "status"=>500)));
+               "message"=>"Missing parameter: estado civil",
+               "status"=>422)));
     } else if(empty($guest_since)){
-      return $response->withStatus(500)
-                      ->withHeader('Content-Type', 'application/json')
-                       ->withJson(array('error' => array(
-                         "type"=>"required",
-                          "message"=>"Missing parameter: guest_since",
-                          "status"=>500)));
+      return $response->withStatus(422)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('error' => array(
+                "type"=>"required",
+                "message"=>"Missing parameter: invitado desde",
+                "status"=>422)));
     }else if(empty($member_since)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: member_since",
-               "status"=>500)));
+               "message"=>"Missing parameter: miembro desde",
+               "status"=>422)));
     } else if(empty($exelerate_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: exelerate_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: exelerate id",
+               "status"=>422)));
     }
 
     // Validations depending on the parameters sent
@@ -64255,12 +63525,12 @@ $app->post('/members/cell-members/add', function ($request,$response) {
                   "message"=>"Debes ingresar una fecha de invitado válida.",
                   "status"=>422)));
     } else if(!$valid_member){
-        return $response->withStatus(500)
+        return $response->withStatus(422)
                         ->withHeader('Content-Type', 'application/json')
                         ->withJson(array('error' => array(
                                "type" => "valid_member",
                                "message"=>"Debes ingresar una fecha de miembro válida.",
-                               "status"=>500)));
+                               "status"=>422)));
     } else if(!$valid_birthdate){
         return $response->withStatus(422)
                 ->withHeader('Content-Type', 'application/json')
@@ -64297,22 +63567,22 @@ $app->post('/members/cell-members/add', function ($request,$response) {
                 ->withHeader('Content-Type', 'application/json')
                 ->withJson(array('error' => array(
                   "type"=>"impersonate_not_valid",
-                  "message"=>"Parámetro impersonate no es válido",
+                  "message"=>"Parámetro impersonado no es válido",
                   "status"=>422)));
       }else if(empty($impersonate_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: impersonate_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: id de impersonado",
+                 "status"=>422)));
      } else if(empty($impersonate_role)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: impersonate_role",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: rol de impersonado",
+                 "status"=>422)));
      }
 
       $pre_imper = $con->prepare("SELECT * FROM user WHERE id = :impersonate_id AND rol = :impersonate_role AND church_id = :church_id AND status = '1' AND verified_account = '1'", 
@@ -64464,8 +63734,56 @@ $app->post('/members/cell-members/add', function ($request,$response) {
 
     $final_date = date("Y-m-d H:i:s");
 
+    // Obtain latitude and longitude of group cell
+    $final_ad = urlencode($address);
+    $final_city = urlencode($city);
+    $geo = $final_ad . ',+' . $final_city;
+
+    $latitude = null;
+    $longitude = null;
+    $latitude_delta = null;
+    $longitude_delta = null;
+
+    $url = "https://maps.googleapis.com/maps/api/geocode/json?address=$geo&key=AIzaSyBF-rxaBu86zHTWlFMketjgJaftZ3HR9YU";
+
+    $ch = curl_init();
+
+    curl_setopt($ch,CURLOPT_URL, $url);
+    curl_setopt($ch,CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+    $result_map = curl_exec($ch);
+
+    curl_close($ch);
+
+    if ($result_map) {
+      $data = json_decode($result_map);
+
+      if($data->status == "OK"){
+          $lat = $data->results[0]->geometry->location->lat;
+          $lng = $data->results[0]->geometry->location->lng;
+
+          // latitude delta
+          $lat_nth = $data->results[0]->geometry->viewport->northeast->lat;
+          $lng_sth = $data->results[0]->geometry->viewport->southwest->lat;
+          $diff = $lat_nth - $lng_sth;
+
+          // longitude delta
+          $lat_nth2 = $data->results[0]->geometry->viewport->northeast->lng;
+          $lng_sth2 = $data->results[0]->geometry->viewport->southwest->lng;
+          $diff2 = $lat_nth2 - $lng_sth2;
+
+          // adding values
+          $latitude = $lat;
+          $longitude = $lng;
+          $latitude_delta = $diff;
+          $longitude_delta = $diff2;
+      }
+
+    }
+
     /*insert member*/
-    $pre = $con->prepare("INSERT INTO members_cells (`cell_id`, `church_id`, `first_name`,`last_name`,`email`,`phone`,`profile_picture`,`address`,`postal_code`,`city`,`gender`,`birth_date`,`marital_status`,`married_since`,`guest_since`,`exelerate_id`,`member_since`,`role`,`active`,`is_complete`,`block`,`created_at`, `updated_at`) VALUES (:cell_id, :church_id,:first_name,:last_name,:email,:phone,:profile_picture,:address,:postal_code,:city,:gender,:birth_date,:marital_status,:married_since,:guest_since,:exelerate_id,:member_since,'2','1','0','0','$final_date', '$final_date')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+    $pre = $con->prepare("INSERT INTO members_cells (`cell_id`, `church_id`, `first_name`,`last_name`,`email`,`phone`,`profile_picture`,`address`,`latitude`,`longitude`,`latitude_delta`,`longitude_delta`,`postal_code`,`city`,`gender`,`birth_date`,`marital_status`,`married_since`,`guest_since`,`exelerate_id`,`member_since`,`role`,`active`,`is_complete`,`block`,`created_at`, `updated_at`) VALUES (:cell_id, :church_id,:first_name,:last_name,:email,:phone,:profile_picture,:address,:latitude,:longitude,:latitude_delta,:longitude_delta,:postal_code,:city,:gender,:birth_date,:marital_status,:married_since,:guest_since,:exelerate_id,:member_since,'2','1','0','0','$final_date', '$final_date')", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
     $values = array(
         ':cell_id' => $cell_id, 
@@ -64476,6 +63794,10 @@ $app->post('/members/cell-members/add', function ($request,$response) {
         ':phone' => $phone,
         ':profile_picture' => $profile_picture,
         ':address' => $address,
+        ':latitude' => $latitude,
+        ':longitude' => $longitude,
+        ':latitude_delta' => $latitude_delta,
+        ':longitude_delta' => $longitude_delta,
         ':postal_code' => $postal_code,
         ':city' => $city,
         ':gender' => $gender,
@@ -64645,33 +63967,33 @@ $app->get('/members/cell-members/profile', function ($request,$response) {
    $member_id = $request->getParam('member_id');
 
    if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(empty($role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($member_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: member_id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de miembro",
+               "status"=>422)));
    } 
 
    /*verify if user exist*/
@@ -64712,7 +64034,7 @@ $app->get('/members/cell-members/profile', function ($request,$response) {
     }
 
     // General process
-    $pre = $con->prepare("SELECT id, cell_id, CONCAT(IFNULL(first_name,''),' ',IFNULL(last_name,'')) AS full_name, first_name, last_name, email, phone, profile_picture, address, postal_code, city, gender, birth_date, role, marital_status, married_since, guest_since, member_since, exelerate_id, is_complete FROM members_cells WHERE id = :member_id AND church_id = :church_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+    $pre = $con->prepare("SELECT id, cell_id, CONCAT(IFNULL(first_name,''),' ',IFNULL(last_name,'')) AS full_name, first_name, last_name, email, phone, profile_picture, address, latitude, longitude, latitude_delta, longitude_delta, postal_code, city, gender, birth_date, role, marital_status, married_since, guest_since, member_since, exelerate_id, is_complete FROM members_cells WHERE id = :member_id AND church_id = :church_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
 
     $values = array(':member_id' => $member_id, ':church_id' => $church_id);
     $pre->execute($values);
@@ -64754,6 +64076,10 @@ $app->get('/members/cell-members/profile', function ($request,$response) {
         "email" => $result['email'],
         "phone" => $result['phone'],
         "address" => $result['address'],
+        "latitude" => $result['latitude'],
+        "longitude" => $result['longitude'],
+        "latitude_delta" => $result['latitude_delta'],
+        "longitude_delta" => $result['longitude_delta'],
         "postal_code" => $result['postal_code'],
         "city" => $result['city'],
         "gender" => $result['gender'],
@@ -64833,117 +64159,117 @@ $app->put('/members/cell-members/edit', function ($request,$response) {
      $valid_member = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$member_since);
 
      if(empty($user_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: user_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: id de usuario",
+                 "status"=>422)));
      } else if(empty($role_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: role_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: rol de usuario",
+                 "status"=>422)));
      } else if(empty($church_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: church_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: id de iglesia",
+                 "status"=>422)));
      } else if(empty($member_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: member_id",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: id de miembro",
+                 "status"=>422)));
      } else if(empty($first_name)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: first_name",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: nombre",
+                 "status"=>422)));
       } else if(empty($last_name)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
-                 "message"=>"Parámetro faltante: last_name",
-                 "status"=>500)));
+                 "message"=>"Parámetro faltante: apellido",
+                 "status"=>422)));
       } else if(empty($phone)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: phone",
-               "status"=>500)));
+               "message"=>"Missing parameter: teléfono",
+               "status"=>422)));
     } else if(empty($address)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: address",
-               "status"=>500)));
+               "message"=>"Missing parameter: dirección",
+               "status"=>422)));
     } else if(empty($city)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: city",
-               "status"=>500)));
+               "message"=>"Missing parameter: ciudad",
+               "status"=>422)));
     } else if(empty($postal_code)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: postal_code",
-               "status"=>500)));
+               "message"=>"Missing parameter: código postal",
+               "status"=>422)));
     } else if(empty($birth_date)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: birth_date",
-               "status"=>500)));
+               "message"=>"Missing parameter: fecha de nacimiento",
+               "status"=>422)));
      } else if(empty($gender)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: gender",
-               "status"=>500)));
+               "message"=>"Missing parameter: género",
+               "status"=>422)));
     } else if(empty($marital_status)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: marital_status",
-               "status"=>500)));
+               "message"=>"Missing parameter: estado civil",
+               "status"=>422)));
     } else if(empty($guest_since)){
-      return $response->withStatus(500)
+      return $response->withStatus(422)
                       ->withHeader('Content-Type', 'application/json')
                        ->withJson(array('error' => array(
                          "type"=>"required",
-                          "message"=>"Missing parameter: guest_since",
-                          "status"=>500)));
+                          "message"=>"Missing parameter: invitado desde",
+                          "status"=>422)));
     }else if(empty($member_since)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: member_since",
-               "status"=>500)));
+               "message"=>"Missing parameter: miembro desde",
+               "status"=>422)));
     } else if(empty($exelerate_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Missing parameter: exelerate_id",
-               "status"=>500)));
+               "message"=>"Missing parameter: exelerate id",
+               "status"=>422)));
     }
 
     // Validations depending on the parameters sent
@@ -64969,12 +64295,12 @@ $app->put('/members/cell-members/edit', function ($request,$response) {
                   "message"=>"Debes ingresar una fecha de invitado válida.",
                   "status"=>422)));
     } else if(!$valid_member){
-        return $response->withStatus(500)
+        return $response->withStatus(422)
                         ->withHeader('Content-Type', 'application/json')
                         ->withJson(array('error' => array(
                                "type" => "valid_member",
                                "message"=>"Debes ingresar una fecha de miembro válida.",
-                               "status"=>500)));
+                               "status"=>422)));
     } else if(!$valid_birthdate){
         return $response->withStatus(422)
                 ->withHeader('Content-Type', 'application/json')
@@ -65014,19 +64340,19 @@ $app->put('/members/cell-members/edit', function ($request,$response) {
                   "message"=>"Parámetro impersonate no es válido",
                   "status"=>422)));
       }else if(empty($impersonate_id)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
                  "message"=>"Parámetro faltante: impersonate_id",
-                 "status"=>500)));
+                 "status"=>422)));
      } else if(empty($impersonate_role)){
-       return $response->withStatus(500)
+       return $response->withStatus(422)
                ->withHeader('Content-Type', 'application/json')
                ->withJson(array('error' => array(
                  "type"=>"required",
                  "message"=>"Parámetro faltante: impersonate_role",
-                 "status"=>500)));
+                 "status"=>422)));
      }
 
       $pre_imper = $con->prepare("SELECT * FROM user WHERE id = :impersonate_id AND rol = :impersonate_role AND church_id = :church_id AND status = '1' AND verified_account = '1'", 
@@ -65149,11 +64475,63 @@ $app->put('/members/cell-members/edit', function ($request,$response) {
 
         $final_d = date("Y-m-d H:i:s");
 
+        // Obtain latitude and longitude of group cell
+        $final_ad = urlencode($address);
+        $final_city = urlencode($city);
+        $geo = $final_ad . ',+' . $final_city;
+
+        $latitude = null;
+        $longitude = null;
+        $latitude_delta = null;
+        $longitude_delta = null;
+
+        $url = "https://maps.googleapis.com/maps/api/geocode/json?address=$geo&key=AIzaSyBF-rxaBu86zHTWlFMketjgJaftZ3HR9YU";
+
+        $ch = curl_init();
+
+        curl_setopt($ch,CURLOPT_URL, $url);
+        curl_setopt($ch,CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+        $result_map = curl_exec($ch);
+
+        curl_close($ch);
+
+        if ($result_map) {
+          $data = json_decode($result_map);
+
+          if($data->status == "OK"){
+              $lat = $data->results[0]->geometry->location->lat;
+              $lng = $data->results[0]->geometry->location->lng;
+
+              // latitude delta
+              $lat_nth = $data->results[0]->geometry->viewport->northeast->lat;
+              $lng_sth = $data->results[0]->geometry->viewport->southwest->lat;
+              $diff = $lat_nth - $lng_sth;
+
+              // longitude delta
+              $lat_nth2 = $data->results[0]->geometry->viewport->northeast->lng;
+              $lng_sth2 = $data->results[0]->geometry->viewport->southwest->lng;
+              $diff2 = $lat_nth2 - $lng_sth2;
+
+              // adding values
+              $latitude = $lat;
+              $longitude = $lng;
+              $latitude_delta = $diff;
+              $longitude_delta = $diff2;
+          }
+
+        }
+
         $pre = $con->prepare("UPDATE members_cells SET first_name = :first_name,
                                last_name = :last_name,
                                email = :email,
                                phone = :phone,
                                address = :address,
+                               latitude = :latitude,
+                               longitude = :longitude,
+                               latitude_delta = :latitude_delta,
+                               longitude_delta = :longitude_delta,
                                postal_code = :postal_code,
                                city = :city,
                                birth_date = :birth_date,
@@ -65176,6 +64554,10 @@ $app->put('/members/cell-members/edit', function ($request,$response) {
           ':profile_picture' => $profile_picture,
           ':phone' => $phone,
           ':address' => $address,
+          ':latitude' => $latitude,
+          ':longitude' => $longitude,
+          ':latitude_delta' => $latitude_delta,
+          ':longitude_delta' => $longitude_delta,
           ':postal_code' => $postal_code,
           ':city' => $city,
           ':birth_date' => $birth_date,
@@ -65330,54 +64712,54 @@ $app->post('/members/cell-members/assign-steps', function ($request,$response) {
     $step_date = $request->getParam('step_date');
 
     if(empty($user_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: user id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de usuario",
+               "status"=>422)));
    } else if(!preg_match("/^[0-9]+$/i", $role_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: role id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: rol de usuario",
+               "status"=>422)));
    } else if(empty($church_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: church id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de iglesia",
+               "status"=>422)));
    } else if(empty($member_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: guest id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de invitado",
+               "status"=>422)));
    } else if(empty($step_id)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: step id",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: id de paso",
+               "status"=>422)));
    }else if(empty($step_name)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: step name",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: nombre del paso",
+               "status"=>422)));
    }else if(empty($step_date)){
-     return $response->withStatus(500)
+     return $response->withStatus(422)
              ->withHeader('Content-Type', 'application/json')
              ->withJson(array('error' => array(
                "type"=>"required",
-               "message"=>"Parámetro faltante: step date",
-               "status"=>500)));
+               "message"=>"Parámetro faltante: fecha del paso",
+               "status"=>422)));
    }
 
    $valid_date = preg_match("/^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[1-2][0-9]|3[0-1])$/",$step_date);
@@ -65603,6 +64985,1404 @@ $app->post('/members/cell-members/assign-steps', function ($request,$response) {
 
 });
 
+/*************** DOWNLOADS ***************/
+$app->post('/download/member-list', function ($request,$response) {
+
+  try{
+   $con = $this->db;
+   $user_id = $request->getParam('user_id');
+   $role_id = $request->getParam('role_id');
+   $church_id = $request->getParam('church_id');
+   $parent_id = $request->getParam('parent_id');
+   $active = $request->getParam('active');
+   $type_member = $request->getParam('type_member');
+   $type_report = $request->getParam('type_report');
+
+   $filter_district = $request->getParam('filter_district');
+   $filter_zone = $request->getParam('filter_zone');
+   $filter_sector = $request->getParam('filter_sector');
+   $filter_cell = $request->getParam('filter_cell');
+
+   if(empty($user_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+              "type"=>"required",
+               "message"=>"Missing parameter: id de usuario",
+               "status"=>422)));
+   } else if(empty($role_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+              "type"=>"required",
+               "message"=>"Missing parameter: rol de usuario",
+               "status"=>422)));
+   } else if(empty($church_id)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+              "type"=>"required",
+               "message"=>"Missing parameter: id de iglesia",
+               "status"=>422)));
+   } else if(empty($type_member)){
+     return $response->withStatus(422)
+             ->withHeader('Content-Type', 'application/json')
+             ->withJson(array('error' => array(
+              "type"=>"required",
+               "message"=>"Missing parameter: tipo de miembro",
+               "status"=>422)));
+   } else if(empty($type_report)){
+      return $response->withStatus(422)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('error' => array(
+                "type"=>"required",
+                "message"=>"Missing parameter: tipo de reporte",
+                "status"=>422)));
+
+   }
+
+
+  $pre_i = $con->prepare("SELECT *
+                           FROM user
+                           WHERE id = :user_id AND rol = :role_id AND church_id = :church_id AND status = '1'", 
+                           array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+  $values_i = array(':user_id' => $user_id,':role_id' => $role_id, ':church_id' => $church_id);
+  $pre_i->execute($values_i);
+  $result_i = $pre_i->fetch();
+
+  if ($result_i) {
+
+    /*obtain church name and city*/
+    $pre_ch = $con->prepare("SELECT *
+                             FROM churches
+                             WHERE id = :church_id", 
+                             array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+    $values_ch = array(':church_id' => $church_id);
+    $pre_ch->execute($values_ch);
+    $result_ch = $pre_ch->fetch();
+
+    $church_name = $result_ch['name'];
+    $church_city = $result_ch['city'];
+
+    $final_date = date("Y-m-d H:i:s");
+    $o_date = date("Y-m-d");
+
+    if ($type_member == 'guest'){
+
+        $filter_list = '';
+        
+        if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
+
+          /*if select filter list*/
+          if ($filter_district && empty($filter_zone) && empty($filter_sector) && empty($filter_cell)) {
+
+            $filter_list = "AND groups_zones.district_id = $filter_district";
+
+
+          } else if ($filter_district && $filter_zone && empty($filter_sector) && empty($filter_cell)) {
+
+            $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone";
+
+          } else if ($filter_district && $filter_zone && $filter_sector && empty($filter_cell)) {
+
+            $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector";
+
+          } else if ($filter_district && $filter_zone && $filter_sector && $filter_cell) {
+
+            $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
+            
+          }
+
+          $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_zones, groups_sectors, groups_cells, members_cells WHERE groups_sectors.zone_id = groups_zones.id AND groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_zones.church_id = $church_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1 $filter_list";
+          
+
+        }else if ($role_id == '2') {
+
+            if(empty($parent_id)){
+                  return $response->withStatus(422)
+                         ->withHeader('Content-Type', 'application/json')
+                         ->withJson(array('error' => array(
+                           "type"=>"required",
+                           "message"=>"Missing parameter: id padre",
+                           "status"=>422)));
+            }
+
+            /*if select filter list*/
+            if ($filter_zone && empty($filter_sector) && empty($filter_cell)) {
+
+              $filter_list = "AND groups_sectors.zone_id = $filter_zone";
+
+            } else if ($filter_zone && $filter_sector && empty($filter_cell)) {
+
+              $filter_list = "AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector";
+
+            } else if ($filter_zone && $filter_sector && $filter_cell) {
+
+              $filter_list = "AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
+
+            }
+
+            $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_zones, groups_sectors, groups_cells, members_cells WHERE groups_sectors.zone_id = groups_zones.id AND groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_zones.church_id = 1 AND groups_zones.district_id = $parent_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1 $filter_list";
+            
+            
+        } else if ($role_id == '3') {
+
+            if(empty($parent_id)){
+                  return $response->withStatus(422)
+                         ->withHeader('Content-Type', 'application/json')
+                         ->withJson(array('error' => array(
+                           "type"=>"required",
+                           "message"=>"Missing parameter: id padre",
+                           "status"=>422)));
+            }
+
+            /*if select filter list*/
+            if ($filter_sector && empty($filter_cell)) {
+
+              $filter_list = "AND groups_cells.sector_id = $filter_sector";
+
+            } else if ($filter_sector && $filter_cell) {
+
+              $filter_list = "AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
+
+            } 
+
+            $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_sectors, groups_cells, members_cells WHERE groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_sectors.zone_id = $parent_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1 $filter_list";
+
+            
+        } else if ($role_id == '4') {
+          
+          if(empty($parent_id)){
+                return $response->withStatus(422)
+                       ->withHeader('Content-Type', 'application/json')
+                       ->withJson(array('error' => array(
+                         "type"=>"required",
+                         "message"=>"Missing parameter: id padre",
+                         "status"=>422)));
+          }
+
+          /*if select filter list*/
+          if ($filter_cell) {
+
+            $filter_list = "AND groups_cells.id = $filter_cell";
+
+          }
+
+          $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance 
+          FROM groups_cells, members_cells WHERE members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = $parent_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1 $filter_list";
+
+
+        } else if ($role_id == '5') {
+
+          if(empty($parent_id)){
+                return $response->withStatus(422)
+                       ->withHeader('Content-Type', 'application/json')
+                       ->withJson(array('error' => array(
+                         "type"=>"required",
+                         "message"=>"Missing parameter: id padre",
+                         "status"=>422)));
+          }
+            
+          $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_cells, members_cells WHERE members_cells.cell_id = groups_cells.id AND groups_cells.id = $parent_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role = 1";
+
+
+        }else{ // else role not exist
+
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "type"=>"role_doesnt_exist",
+                        "message"=>"rol no existe",
+                        "status"=>422)));
+        }
+
+        // DOWNLOADS
+        if ($type_report == 'csv') {
+          
+          $stream = fopen('php://memory', 'w+');
+
+          $row = array('Invitados', 'ID', 'Última asistencia','Ciudad','Asistencia');
+          fputcsv($stream, $row, ';');
+
+          foreach ($con->query($sql) as $row) {
+            
+            if ($row['full_name'] == ' ') {
+              $row['full_name'] = '--';
+            }
+            if ($row['last_assistance'] == null) {
+              $row['last_assistance'] = '--';
+            }else{
+              $myDateTime = DateTime::createFromFormat('Y-m-d', $row['last_assistance']);
+              setlocale(LC_ALL, "es_ES");
+              $newDate = strftime("%b %e, %Y", $myDateTime->getTimestamp());
+              $row['last_assistance'] = $newDate;
+            }
+            if ($row['city'] == null) {
+              $row['city'] = '--';
+            }
+
+            $guest[] = $row;
+            fputcsv($stream, $row, ';');
+
+          }
+          
+          rewind($stream);
+
+          $response = $response->withHeader('Content-Type', 'text/csv');
+          $response = $response->withHeader('Content-Disposition', 'attachment; filename="Listado de invitados - '.$o_date.'.csv"');
+
+          return $response->withBody(new \Slim\Http\Stream($stream));
+
+        } else if ($type_report == 'pdf'){
+
+          // create new PDF document
+          $html = '
+          <html>
+          <head>
+              <meta charset="utf-8">
+              <link href="https://fonts.googleapis.com/css?family=Heebo" rel="stylesheet">
+          </head>
+          <body>
+              <table class="head">
+                <thead>
+                  <tr>
+                      <th width="30%" class="slogan">
+                        <img width="120px" src="images/slogan-blue.jpg">
+                      </th>
+                      <th width="70%" class="txt-church">
+                          <b>' .$church_name. '</b>
+                          <p>' .$church_city. '</p>
+                      </th>
+                      <th class="img-church">
+                        <img width="30px" src="images/irest-photo.png">
+                      </th>
+                  </tr>
+                </thead>
+              </table>
+
+              <div class="content-title">
+                  <h3>Invitados</h3>
+                  <p>Exportado: ' .$final_date. '</p>
+              </div>
+              <table class="table">
+                  <thead>
+                      <tr>
+                          <th width="10%">N.</th>
+                          <th width="2%">Invitados</th>
+                          <th width="15%">ID</th>
+                          <th width="20%">Ultima asistencia</th>
+                          <th width="15%">Ciudad</th>
+                          <th width="15%">Asistencia</th>
+                      </tr>
+                  </thead>
+                  <tbody>';
+
+        $i=0;
+
+        foreach ($con->query($sql) as $row) {
+          $i++;
+          setlocale(LC_ALL, "es_ES");
+
+          if ($row['full_name'] == ' ') {
+            $row['full_name'] = '--';
+          }
+          if ($row['last_assistance'] == null) {
+            $row['last_assistance'] = '--';
+          }else{
+            $myDateTime = DateTime::createFromFormat('Y-m-d', $row['last_assistance']);
+            $newDate = strftime("%b %e, %Y", $myDateTime->getTimestamp());
+            $row['last_assistance'] = $newDate;
+          }
+          if ($row['city'] == null) {
+            $row['city'] = '--';
+          }
+          $html.='
+                <tr>
+                  <td>' . $i . '</td>
+                  <td>' . $row['full_name'] . '</td>
+                  <td>' . $row['cell_id'] . '</td>
+                  <td>' . $row['last_assistance'] . '</td>
+                  <td>' . $row['city'] . '</td>
+                  <td>' . $row['assistance'] . '</td>
+                </tr>';
+        }
+
+        $html.='
+              </tbody>
+            </table>
+          </body>
+        </html>';
+
+        $mpdf = new \Mpdf\Mpdf([
+          'mode' => 'utf-8',
+          'margin_left' => 13,
+          'margin_right' => 13,
+          'margin_top' => 10,
+          'margin_bottom' => 15,
+          'margin_header' => 15,
+          'margin_footer' => 5,
+          'pagenumPrefix' => '',
+          'pagenumSuffix' => '',
+          'nbpgPrefix' => ' de ',
+          'nbpgSuffix' => ''
+        ]);
+
+        $mpdf->SetCreator('C+');
+        $mpdf->SetAuthor('C+');
+        $mpdf->SetTitle('Listado de invitados');
+        $mpdf->SetSubject('Listado de invitados');
+
+        $mpdf->SetHTMLFooter('
+        <table width="100%">
+            <tr>
+                <td width="33.33333%"></td>
+                <td width="33.33333%" align="center"></td>
+                <td width="33.33333%" style="text-align: right; color: #6C6D70; font-size: 11px;">{PAGENO}{nbpg}</td>
+            </tr>
+        </table>');
+
+        // Load a stylesheet
+        $stylesheet = file_get_contents('assets/css/pdf-style.css');
+        $mpdf->WriteHTML($stylesheet, 1);
+        $mpdf->WriteHTML($html);
+        $mpdf->Output('Listado de invitados '.$o_date.'.pdf','D');
+
+        }else{
+          return $response->withStatus(422)
+                          ->withHeader('Content-Type', 'application/json')
+                          ->withJson(array('error' => array(
+                                    "message"=>"Type report does not exist",
+                                    "status"=>422)));
+        }
+
+    } else if ($type_member == 'member'){
+
+      $filter_list = '';
+
+      /*agregar codigo de cell member list*/
+      
+      if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
+
+        /*if select filter list*/
+        if ($filter_district && empty($filter_zone) && empty($filter_sector) && empty($filter_cell)) {
+
+          $filter_list = "AND groups_zones.district_id = $filter_district";
+
+        } else if ($filter_district && $filter_zone && empty($filter_sector) && empty($filter_cell)) {
+
+          $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone";
+
+        } else if ($filter_district && $filter_zone && $filter_sector && empty($filter_cell)) {
+
+          $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector";
+
+        } else if ($filter_district && $filter_zone && $filter_sector && $filter_cell) {
+
+          $filter_list = "AND groups_zones.district_id = $filter_district AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
+          
+        }
+
+        $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance,members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_zones, groups_sectors, groups_cells, members_cells WHERE groups_sectors.zone_id = groups_zones.id AND groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_zones.church_id = $church_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1 $filter_list";
+        
+
+      }else if ($role_id == '2') {
+
+          if(empty($parent_id)){
+                return $response->withStatus(422)
+                       ->withHeader('Content-Type', 'application/json')
+                       ->withJson(array('error' => array(
+                         "type"=>"required",
+                         "message"=>"Missing parameter: id padre",
+                         "status"=>422)));
+          }
+
+          /*if select filter list*/
+          if ($filter_zone && empty($filter_sector) && empty($filter_cell)) {
+
+            $filter_list = "AND groups_sectors.zone_id = $filter_zone";
+
+          } else if ($filter_zone && $filter_sector && empty($filter_cell)) {
+
+            $filter_list = "AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector";
+
+          } else if ($filter_zone && $filter_sector && $filter_cell) {
+
+            $filter_list = "AND groups_sectors.zone_id = $filter_zone AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
+
+          }
+
+          $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_zones, groups_sectors, groups_cells, members_cells WHERE groups_sectors.zone_id = groups_zones.id AND groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_zones.church_id = 1 AND groups_zones.district_id = $parent_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1 $filter_list";
+          
+          
+      } else if ($role_id == '3') {
+
+          if(empty($parent_id)){
+                return $response->withStatus(422)
+                       ->withHeader('Content-Type', 'application/json')
+                       ->withJson(array('error' => array(
+                         "type"=>"required",
+                         "message"=>"Missing parameter: id padre",
+                         "status"=>422)));
+          }
+
+          /*if select filter list*/
+          if ($filter_sector && empty($filter_cell)) {
+
+            $filter_list = "AND groups_cells.sector_id = $filter_sector";
+
+          } else if ($filter_sector && $filter_cell) {
+
+            $filter_list = "AND groups_cells.sector_id = $filter_sector AND groups_cells.id = $filter_cell";
+
+          } 
+
+          $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_sectors, groups_cells, members_cells WHERE groups_cells.sector_id = groups_sectors.id AND members_cells.cell_id = groups_cells.id AND groups_sectors.zone_id = $parent_id AND groups_sectors.church_id = $church_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1 $filter_list";
+
+          
+      } else if ($role_id == '4') {
+        
+        if(empty($parent_id)){
+              return $response->withStatus(422)
+                     ->withHeader('Content-Type', 'application/json')
+                     ->withJson(array('error' => array(
+                       "type"=>"required",
+                       "message"=>"Missing parameter: id padre",
+                       "status"=>422)));
+        }
+
+        /*if select filter list*/
+        if ($filter_cell) {
+
+          $filter_list = "AND groups_cells.id = $filter_cell";
+
+        }
+
+        $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance 
+        FROM groups_cells, members_cells WHERE members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = $parent_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1 $filter_list";
+
+
+      } else if ($role_id == '5') {
+
+        if(empty($parent_id)){
+              return $response->withStatus(422)
+                     ->withHeader('Content-Type', 'application/json')
+                     ->withJson(array('error' => array(
+                       "type"=>"required",
+                       "message"=>"Missing parameter: id padre",
+                       "status"=>422)));
+        }
+          
+        $sql = "SELECT CONCAT(members_cells.first_name, ' ', members_cells.last_name) as full_name, CONCAT('D',IF(groups_cells.district_code IS NOT NULL,groups_cells.district_code,''), ' Z',IF(groups_cells.zone_code IS NOT NULL,groups_cells.zone_code,''), ' S', IF(groups_cells.sector_code IS NOT NULL,groups_cells.sector_code,''), ' C', IF(groups_cells.cell_code IS NOT NULL,groups_cells.cell_code,'')) as cell_id, (SELECT MAX(DATE(reports_details.updated_at)) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as last_assistance, members_cells.city, (SELECT count(reports_details.cell_group) FROM reports_details WHERE reports_details.member_id = members_cells.id AND reports_details.cell_group = 1) as assistance FROM groups_cells, members_cells WHERE members_cells.cell_id = groups_cells.id AND groups_cells.id = $parent_id AND groups_cells.church_id = $church_id AND members_cells.church_id = $church_id AND members_cells.active = '1' AND members_cells.role != 1";
+
+
+      }else{ // else role not exist
+
+          return $response->withStatus(422)
+                  ->withHeader('Content-Type', 'application/json')
+                  ->withJson(array('error' => array(
+                      "type"=>"role_doesnt_exist",
+                      "message"=>"rol no existe",
+                      "status"=>422)));
+      }
+
+      // DOWNLOADS
+      if ($type_report == 'csv') {
+        
+        $stream = fopen('php://memory', 'w+');
+
+        $row = array('Miembros', 'ID', 'Última asistencia','Ciudad','Asistencia');
+        fputcsv($stream, $row, ';');
+
+        foreach ($con->query($sql) as $row) {
+          if ($row['full_name'] == ' ') {
+            $row['full_name'] = '--';
+          }
+          if ($row['last_assistance'] == null) {
+            $row['last_assistance'] = '--';
+          }else{
+            $myDateTime = DateTime::createFromFormat('Y-m-d', $row['last_assistance']);
+            setlocale(LC_ALL, "es_ES");
+            $newDate = strftime("%b %e, %Y", $myDateTime->getTimestamp());
+            $row['last_assistance'] = $newDate;
+          }
+          if ($row['city'] == null) {
+            $row['city'] = '--';
+          }
+          $guest[] = $row;
+          fputcsv($stream, $row, ';');
+
+        }
+        
+        rewind($stream);
+
+        $response = $response->withHeader('Content-Type', 'text/csv');
+        $response = $response->withHeader('Content-Disposition', 'attachment; filename="Listado de miembros '.$o_date.'.csv"');
+
+        return $response->withBody(new \Slim\Http\Stream($stream));
+
+      } else if ($type_report == 'pdf'){
+
+        // create new PDF document
+        $html = '
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <link href="https://fonts.googleapis.com/css?family=Heebo" rel="stylesheet">
+        </head>
+        <body>
+            <table class="head">
+              <thead>
+                <tr>
+                    <th width="30%" class="slogan">
+                      <img width="120px" src="images/slogan-blue.jpg">
+                    </th>
+                    <th width="70%" class="txt-church">
+                        <b>' .$church_name. '</b>
+                        <p>' .$church_city. '</p>
+                    </th>
+                    <th class="img-church">
+                      <img width="30px" src="images/irest-photo.png">
+                    </th>
+                </tr>
+              </thead>
+            </table>
+
+            <div class="content-title">
+                <h3>Miembros</h3>
+                <p>Exportado: ' .$final_date. '</p>
+            </div>
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th width="10%">N.</th>
+                        <th width="2%">Miembros</th>
+                        <th width="15%">ID</th>
+                        <th width="20%">Ultima asistencia</th>
+                        <th width="15%">Ciudad</th>
+                        <th width="15%">Asistencia</th>
+                    </tr>
+                </thead>
+                <tbody>';
+
+      $i=0;
+
+      foreach ($con->query($sql) as $row) {
+        $i++;
+        setlocale(LC_ALL, "es_ES");
+
+        if ($row['full_name'] == ' ') {
+          $row['full_name'] = '--';
+        }
+        if ($row['last_assistance'] == null) {
+          $row['last_assistance'] = '--';
+        }else{
+          $myDateTime = DateTime::createFromFormat('Y-m-d', $row['last_assistance']);
+          $newDate = strftime("%b %e, %Y", $myDateTime->getTimestamp());
+          $row['last_assistance'] = $newDate;
+        }
+        if ($row['city'] == null) {
+          $row['city'] = '--';
+        }
+        $html.='
+              <tr>
+                <td>' . $i . '</td>
+                <td>' . $row['full_name'] . '</td>
+                <td>' . $row['cell_id'] . '</td>
+                <td>' . $row['last_assistance'] . '</td>
+                <td>' . $row['city'] . '</td>
+                <td>' . $row['assistance'] . '</td>
+              </tr>';
+      }
+
+      $html.='
+            </tbody>
+          </table>
+        </body>
+      </html>';
+
+      $mpdf = new \Mpdf\Mpdf([
+        'mode' => 'utf-8',
+        'margin_left' => 13,
+        'margin_right' => 13,
+        'margin_top' => 10,
+        'margin_bottom' => 15,
+        'margin_header' => 15,
+        'margin_footer' => 5,
+        'pagenumPrefix' => '',
+        'pagenumSuffix' => '',
+        'nbpgPrefix' => ' de ',
+        'nbpgSuffix' => ''
+      ]);
+
+      $mpdf->SetCreator('C+');
+      $mpdf->SetAuthor('C+');
+      $mpdf->SetTitle('Listado de miembros');
+      $mpdf->SetSubject('Listado de miembros');
+
+      $mpdf->SetHTMLFooter('
+      <table width="100%">
+          <tr>
+              <td width="33.33333%"></td>
+              <td width="33.33333%" align="center"></td>
+              <td width="33.33333%" style="text-align: right; color: #6C6D70; font-size: 11px;">{PAGENO}{nbpg}</td>
+          </tr>
+      </table>');
+
+      // Load a stylesheet
+      $stylesheet = file_get_contents('assets/css/pdf-style.css');
+      $mpdf->WriteHTML($stylesheet, 1);
+      $mpdf->WriteHTML($html);
+      $mpdf->Output('Listado de miembros '.$o_date.'.pdf','D');
+
+      }else{
+        return $response->withStatus(422)
+                        ->withHeader('Content-Type', 'application/json')
+                        ->withJson(array('error' => array(
+                                  "message"=>"Type report does not exist",
+                                  "status"=>422)));
+      }
+
+
+    } else if ($type_member == 'leader'){
+
+      if ($active == '0' || $active == '1') {
+
+        $filter_list = '';
+        
+        if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
+
+          /*if select filter list*/
+          if ($filter_district && empty($filter_zone) && empty($filter_sector)) {
+
+            $filter_list = "AND user_groups.district_id = $filter_district";
+
+
+          } else if ($filter_district && $filter_zone && empty($filter_sector)) {
+
+            $filter_list = "AND user_groups.district_id = $filter_district AND user_groups.zone_id = $filter_zone";
+
+          } else if ($filter_district && $filter_zone && $filter_sector) {
+
+            $filter_list = "AND user_groups.district_id = $filter_district AND user_groups.zone_id = $filter_zone AND user_groups.sector_id = $filter_sector";
+
+          }
+
+          // if cell_id exist, else sector_id
+          $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.district_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' Z', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.zone_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' S', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.sector_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)),IF(user_groups.cell_id IS NOT NULL, CONCAT(' C',(SELECT groups_cells.cell_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id)), '')) as cell_group, user.city, IF(user_groups.cell_id IS NOT NULL, (SELECT count(members_cells.id) FROM members_cells where members_cells.cell_id = user_groups.cell_id and members_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1'), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 5 AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
+          
+
+        }else if ($role_id == '2') {
+
+            if(empty($parent_id)){
+                  return $response->withStatus(422)
+                         ->withHeader('Content-Type', 'application/json')
+                         ->withJson(array('error' => array(
+                           "message"=>"Missing parameter: id padre",
+                           "status"=>422)));
+            }
+
+            /*if select filter list*/
+            if ($filter_zone && empty($filter_sector)) {
+
+              $filter_list = "AND user_groups.zone_id = $filter_zone";
+
+
+            } else if ($filter_zone && $filter_sector) {
+
+              $filter_list = "AND user_groups.zone_id = $filter_zone AND user_groups.sector_id = $filter_sector";
+
+            }
+
+            $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.district_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' Z', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.zone_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' S', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.sector_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)),IF(user_groups.cell_id IS NOT NULL, CONCAT(' C', (SELECT groups_cells.cell_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id)), '')) as cell_group, user.city, IF(user_groups.cell_id IS NOT NULL, (SELECT count(members_cells.id) FROM members_cells where members_cells.cell_id = user_groups.cell_id and members_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1'), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 5 AND user_groups.district_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
+            
+            
+        } else if ($role_id == '3') {
+
+            if(empty($parent_id)){
+                  return $response->withStatus(422)
+                         ->withHeader('Content-Type', 'application/json')
+                         ->withJson(array('error' => array(
+                           "message"=>"Missing parameter: id padre",
+                           "status"=>422)));
+            }
+
+            /*if select filter list*/
+            if ($filter_sector) {
+              $filter_list = "AND user_groups.sector_id = $filter_sector";
+
+            }
+
+            $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.district_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' Z', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.zone_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' S', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.sector_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)),IF(user_groups.cell_id IS NOT NULL, CONCAT(' C', (SELECT groups_cells.cell_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id)), '')) as cell_group, user.city, IF(user_groups.cell_id IS NOT NULL, (SELECT count(members_cells.id) FROM members_cells where members_cells.cell_id = user_groups.cell_id and members_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1'), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 5 AND user_groups.zone_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
+
+            
+        } else if ($role_id == '4') {
+          
+          if(empty($parent_id)){
+                return $response->withStatus(422)
+                       ->withHeader('Content-Type', 'application/json')
+                       ->withJson(array('error' => array(
+                         "message"=>"Missing parameter: id padre",
+                         "status"=>422)));
+          }
+
+          $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.district_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' Z', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.zone_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), ' S', IF(user_groups.cell_id IS NOT NULL, (SELECT groups_cells.sector_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id), (SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)),IF(user_groups.cell_id IS NOT NULL, CONCAT(' C', (SELECT groups_cells.cell_code FROM groups_cells where groups_cells.id = user_groups.cell_id and groups_cells.church_id = $church_id)), '')) as cell_group, user.city, IF(user_groups.cell_id IS NOT NULL, (SELECT count(members_cells.id) FROM members_cells where members_cells.cell_id = user_groups.cell_id and members_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1'), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 5 AND user_groups.sector_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
+
+
+        } else{ // else role not exist
+
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"rol no existe",
+                        "status"=>422)));
+        }
+
+        // DOWNLOADS
+        if ($type_report == 'csv') {
+          
+          $stream = fopen('php://memory', 'w+');
+
+          $row = array('LEADER', 'CELL GROUP','CITY','MEMBERS');
+          fputcsv($stream, $row, ';');
+
+          foreach ($con->query($sql) as $row) {
+            if ($row['full_name'] == ' ') {
+              $row['full_name'] = '--';
+            }
+            if ($row['city'] == null) {
+              $row['city'] = '--';
+            }
+            $guest[] = $row;
+            fputcsv($stream, $row, ';');
+
+          }
+          
+          rewind($stream);
+
+          $response = $response->withHeader('Content-Type', 'text/csv');
+          $response = $response->withHeader('Content-Disposition', 'attachment; filename="leaders_list.csv"');
+
+          return $response->withBody(new \Slim\Http\Stream($stream));
+
+        } else if ($type_report == 'pdf'){
+
+          // create new PDF document
+          $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
+
+          // set document information
+          $pdf->SetCreator('PDF');
+          $pdf->SetAuthor('C+');
+          $pdf->SetTitle('Leaders List');
+          $pdf->SetSubject('Leaders List');
+          $pdf->SetKeywords('');
+
+          // set default header data
+          $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
+          $pdf->setFooterData(array(0,64,0), array(0,64,128));
+
+          // set header and footer fonts
+          $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
+          $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
+
+          // set default monospaced font
+          $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
+
+          // set margins
+          $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
+          $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
+          $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
+
+          // set auto page breaks
+          $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
+
+          // set image scale factor
+          $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
+
+          // set default font subsetting mode
+          $pdf->setFontSubsetting(true);
+
+          // Set font
+          $pdf->SetFont('helvetica', '', 12, '', true);
+
+          // Add a page
+          $pdf->AddPage();
+
+          // Set some content to print
+          $html ='
+          <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>City:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>Leaders List</b><br>Exported: ' .$final_date. '</p>
+          <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
+          <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>LEADER</b></th>
+          <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>CELL GROUP</b></th>
+          <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>CITY</b></th>
+          <th style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>MEMBERS</b></th></tr>';
+
+          foreach ($con->query($sql) as $row) {
+            if ($row['full_name'] == ' ') {
+              $row['full_name'] = '--';
+            }
+            if ($row['city'] == null) {
+              $row['city'] = '--';
+            }
+            $html.='
+                <tr>
+                  <td style="height: 30px;">' . $row['full_name'] . '</td>
+                  <td style="height: 30px;">' . $row['cell_group'] . '</td>
+                  <td style="height: 30px;">' . $row['city'] . '</td>
+                  <td style="height: 30px;">' . $row['members'] . '</td>
+                </tr>';
+          }
+          $html.='</table>';
+
+          // Print text using writeHTML
+          $pdf->writeHTML($html, true, false, false, false, '');
+
+          // Close and output PDF document
+          $pdf->Output('leaders_list.pdf', 'D');
+
+        }else{
+          return $response->withStatus(422)
+                          ->withHeader('Content-Type', 'application/json')
+                          ->withJson(array('error' => array(
+                                    "message"=>"Type report does not exist",
+                                    "status"=>422)));
+        }
+
+
+      } else{
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "message"=>"Filter active does not exist",
+                    "status"=>422)));
+      }
+
+
+    } else if ($type_member == 'supervisor'){
+
+      if ($active == '0' || $active == '1') {
+
+        $filter_list = '';
+        
+        if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
+
+          /*if select filter list*/
+          if ($filter_district && empty($filter_zone)) {
+
+            $filter_list = "AND user_groups.district_id = $filter_district";
+
+          } else if ($filter_district && $filter_zone) {
+
+            $filter_list = "AND user_groups.district_id = $filter_district AND user_groups.zone_id = $filter_zone";
+
+          }
+
+          // if cell_id exist, else sector_id
+          $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.district_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), ' Z', IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.zone_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), IF(user_groups.sector_id IS NOT NULL, CONCAT(' S',(SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), '')) as sector, user.city, IF(user_groups.sector_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells where groups_cells.sector_id = user_groups.sector_id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.sector_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells WHERE members_cells.church_id = $church_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = user_groups.sector_id AND groups_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 4 AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
+          
+
+        }else if ($role_id == '2') {
+
+            if(empty($parent_id)){
+                  return $response->withStatus(422)
+                         ->withHeader('Content-Type', 'application/json')
+                         ->withJson(array('error' => array(
+                           "message"=>"Missing parameter: id padre",
+                           "status"=>422)));
+            }
+
+            /*if select filter list*/
+            if ($filter_zone) {
+
+              $filter_list = "AND user_groups.zone_id = $filter_zone";
+
+            } 
+
+            $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.district_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), ' Z', IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.zone_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), IF(user_groups.sector_id IS NOT NULL, CONCAT(' S',(SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), '')) as sector, user.city, IF(user_groups.sector_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells where groups_cells.sector_id = user_groups.sector_id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.sector_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells WHERE members_cells.church_id = $church_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = user_groups.sector_id AND groups_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 4 AND user_groups.district_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
+            
+            
+        } else if ($role_id == '3') {
+
+            if(empty($parent_id)){
+                  return $response->withStatus(422)
+                         ->withHeader('Content-Type', 'application/json')
+                         ->withJson(array('error' => array(
+                           "message"=>"Missing parameter: id padre",
+                           "status"=>422)));
+            }
+
+
+            $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.district_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.district_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), ' Z', IF(user_groups.sector_id IS NOT NULL, (SELECT groups_sectors.zone_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id), (SELECT groups_zones.zone_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), IF(user_groups.sector_id IS NOT NULL, CONCAT(' S',(SELECT groups_sectors.sector_code FROM groups_sectors where groups_sectors.id = user_groups.sector_id and groups_sectors.church_id = $church_id)), '')) as sector, user.city, IF(user_groups.sector_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells where groups_cells.sector_id = user_groups.sector_id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.sector_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells WHERE members_cells.church_id = $church_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = user_groups.sector_id AND groups_cells.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 4 AND user_groups.zone_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active";
+
+            
+        } else{ // else role not exist
+
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"rol no existe",
+                        "status"=>422)));
+        }
+
+        // DOWNLOADS
+        if ($type_report == 'csv') {
+          
+          $stream = fopen('php://memory', 'w+');
+
+          $row = array('SUPERVISOR', 'SECTOR','CITY','LEADERS','MEMBERS');
+          fputcsv($stream, $row, ';');
+
+          foreach ($con->query($sql) as $row) {
+            if ($row['full_name'] == ' ') {
+              $row['full_name'] = '--';
+            }
+            if ($row['city'] == null) {
+              $row['city'] = '--';
+            }
+            $supervisors[] = $row;
+            fputcsv($stream, $row, ';');
+
+          }
+          
+          rewind($stream);
+
+          $response = $response->withHeader('Content-Type', 'text/csv');
+          $response = $response->withHeader('Content-Disposition', 'attachment; filename="supervisors_list.csv"');
+
+          return $response->withBody(new \Slim\Http\Stream($stream));
+
+        } else if ($type_report == 'pdf'){
+
+          // create new PDF document
+          $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
+
+          // set document information
+          $pdf->SetCreator('PDF');
+          $pdf->SetAuthor('C+');
+          $pdf->SetTitle('Supervisors List');
+          $pdf->SetSubject('Supervisors List');
+          $pdf->SetKeywords('');
+
+          // set default header data
+          $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
+          $pdf->setFooterData(array(0,64,0), array(0,64,128));
+
+          // set header and footer fonts
+          $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
+          $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
+
+          // set default monospaced font
+          $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
+
+          // set margins
+          $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
+          $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
+          $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
+
+          // set auto page breaks
+          $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
+
+          // set image scale factor
+          $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
+
+          // set default font subsetting mode
+          $pdf->setFontSubsetting(true);
+
+          // Set font
+          $pdf->SetFont('helvetica', '', 12, '', true);
+
+          // Add a page
+          $pdf->AddPage();
+
+          // Set some content to print
+          $html ='
+          <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>City:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>Supervisors List</b><br>Exported: ' .$final_date. '</p>
+          <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
+          <th width= "170" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>SUPERVISOR</b></th>
+          <th  width= "120" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>SECTOR</b></th>
+          <th width= "130" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>CITY</b></th>
+          <th width="110" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>LEADERS</b></th>
+          <th width="100"style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>MEMBERS</b></th></tr>';
+
+          foreach ($con->query($sql) as $row) {
+            if ($row['full_name'] == ' ') {
+              $row['full_name'] = '--';
+            }
+            if ($row['city'] == null) {
+              $row['city'] = '--';
+            }
+            $html.='
+                <tr>
+                  <td style="height: 30px;">' . $row['full_name'] . '</td>
+                  <td style="height: 30px;">' . $row['sector'] . '</td>
+                  <td style="height: 30px;">' . $row['city'] . '</td>
+                  <td style="height: 30px;">' . $row['leaders'] . '</td>
+                  <td style="height: 30px;">' . $row['members'] . '</td>
+                </tr>';
+          }
+          $html.='</table>';
+
+          // Print text using writeHTML
+          $pdf->writeHTML($html, true, false, false, false, '');
+
+          // Close and output PDF document
+          $pdf->Output('supervisors_list.pdf', 'D');
+
+        }else{
+          return $response->withStatus(422)
+                          ->withHeader('Content-Type', 'application/json')
+                          ->withJson(array('error' => array(
+                                    "message"=>"Type report does not exist",
+                                    "status"=>422)));
+        }
+
+
+      } else{
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "message"=>"Filter active does not exist",
+                    "status"=>422)));
+      }
+
+
+    } else if ($type_member == 'zone_pastor'){
+
+      if ($active == '0' || $active == '1') {
+
+        $filter_list = '';
+        
+        if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
+
+          /*if select filter list*/
+          if ($filter_district) {
+            $filter_list = "AND user_groups.district_id = $filter_district";
+          }
+
+          // if cell_id exist, else sector_id
+          $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.zone_id IS NOT NULL, (SELECT groups_zones.district_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id), (SELECT groups_districts.district_code FROM groups_districts where groups_districts.id = user_groups.district_id and groups_districts.church_id = $church_id)), IF(user_groups.zone_id IS NOT NULL, CONCAT(' Z',(SELECT groups_zones.zone_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), '')) as zone, user.city, IF(user_groups.zone_id != 'NULL', (SELECT count(groups_sectors.supervisor) from groups_sectors where groups_sectors.zone_id = user_groups.zone_id and groups_sectors.church_id = $church_id), '0') as supervisors, IF(user_groups.zone_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells, groups_sectors where groups_sectors.zone_id = user_groups.zone_id and groups_cells.sector_id = groups_sectors.id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.zone_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells, groups_sectors WHERE members_cells.church_id = $church_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = groups_sectors.id AND groups_sectors.zone_id = user_groups.zone_id AND groups_cells.church_id = $church_id AND groups_sectors.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 3 AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
+          
+
+        }else if ($role_id == '2') {
+
+            if(empty($parent_id)){
+                  return $response->withStatus(422)
+                         ->withHeader('Content-Type', 'application/json')
+                         ->withJson(array('error' => array(
+                           "message"=>"Missing parameter: id padre",
+                           "status"=>422)));
+            } 
+
+            $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, CONCAT('D',IF(user_groups.zone_id IS NOT NULL, (SELECT groups_zones.district_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id), (SELECT groups_districts.district_code FROM groups_districts where groups_districts.id = user_groups.district_id and groups_districts.church_id = $church_id)), IF(user_groups.zone_id IS NOT NULL, CONCAT(' Z',(SELECT groups_zones.zone_code FROM groups_zones where groups_zones.id = user_groups.zone_id and groups_zones.church_id = $church_id)), '')) as zone, user.city, IF(user_groups.zone_id != 'NULL', (SELECT count(groups_sectors.supervisor) from groups_sectors where groups_sectors.zone_id = user_groups.zone_id and groups_sectors.church_id = $church_id), '0') as supervisors, IF(user_groups.zone_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells, groups_sectors where groups_sectors.zone_id = user_groups.zone_id and groups_cells.sector_id = groups_sectors.id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.zone_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells, groups_sectors WHERE members_cells.church_id = $church_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = groups_sectors.id AND groups_sectors.zone_id = user_groups.zone_id AND groups_cells.church_id = $church_id AND groups_sectors.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 3 AND user_groups.district_id = $parent_id AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active $filter_list";
+            
+            
+        } else{ // else role not exist
+
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"rol no existe",
+                        "status"=>422)));
+        }
+
+        // DOWNLOADS
+        if ($type_report == 'csv') {
+          
+          $stream = fopen('php://memory', 'w+');
+
+          $row = array('ZONE PASTOR', 'ZONE','CITY','SUPERVISORS','LEADERS','MEMBERS');
+          fputcsv($stream, $row, ';');
+
+          foreach ($con->query($sql) as $row) {
+            if ($row['full_name'] == ' ') {
+              $row['full_name'] = '--';
+            }
+            if ($row['city'] == null) {
+              $row['city'] = '--';
+            }
+            $zone_pastors[] = $row;
+            fputcsv($stream, $row, ';');
+
+          }
+          
+          rewind($stream);
+
+          $response = $response->withHeader('Content-Type', 'text/csv');
+          $response = $response->withHeader('Content-Disposition', 'attachment; filename="zone_pastors_list.csv"');
+
+          return $response->withBody(new \Slim\Http\Stream($stream));
+
+        } else if ($type_report == 'pdf'){
+
+          // create new PDF document
+          $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
+
+          // set document information
+          $pdf->SetCreator('PDF');
+          $pdf->SetAuthor('C+');
+          $pdf->SetTitle('Zone Pastors List');
+          $pdf->SetSubject('Zone Pastors List');
+          $pdf->SetKeywords('');
+
+          // set default header data
+          $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
+          $pdf->setFooterData(array(0,64,0), array(0,64,128));
+
+          // set header and footer fonts
+          $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
+          $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
+
+          // set default monospaced font
+          $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
+
+          // set margins
+          $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
+          $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
+          $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
+
+          // set auto page breaks
+          $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
+
+          // set image scale factor
+          $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
+
+          // set default font subsetting mode
+          $pdf->setFontSubsetting(true);
+
+          // Set font
+          $pdf->SetFont('helvetica', '', 12, '', true);
+
+          // Add a page
+          $pdf->AddPage();
+
+          // Set some content to print
+          $html ='
+          <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>City:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>Zone Pastors List</b><br>Exported: ' .$final_date. '</p>
+          <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
+          <th width= "160" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>ZONE PASTOR</b></th>
+          <th  width= "90" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>ZONE</b></th>
+          <th width= "125" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>CITY</b></th>
+          <th width="100" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>SUPERVISORS</b></th>
+          <th width="75" style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>LEADERS</b></th>
+          <th width="80"style="border-bottom: 1px solid rgb(0,64,128); height: 20px;"><b>MEMBERS</b></th></tr>';
+
+          foreach ($con->query($sql) as $row) {
+            if ($row['full_name'] == ' ') {
+              $row['full_name'] = '--';
+            }
+            if ($row['city'] == null) {
+              $row['city'] = '--';
+            }
+            $html.='
+                <tr>
+                  <td style="height: 30px;">' . $row['full_name'] . '</td>
+                  <td style="height: 30px;">' . $row['zone'] . '</td>
+                  <td style="height: 30px;">' . $row['city'] . '</td>
+                  <td style="height: 30px;">' . $row['supervisors'] . '</td>
+                  <td style="height: 30px;">' . $row['leaders'] . '</td>
+                  <td style="height: 30px;">' . $row['members'] . '</td>
+                </tr>';
+          }
+          $html.='</table>';
+
+          // Print text using writeHTML
+          $pdf->writeHTML($html, true, false, false, false, '');
+
+          // Close and output PDF document
+          $pdf->Output('zone_pastors_list.pdf', 'D');
+
+        }else{
+          return $response->withStatus(422)
+                          ->withHeader('Content-Type', 'application/json')
+                          ->withJson(array('error' => array(
+                                    "message"=>"Type report does not exist",
+                                    "status"=>422)));
+        }
+
+
+      } else{
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "message"=>"Filter active does not exist",
+                    "status"=>422)));
+      }
+
+
+    } else if ($type_member == 'district_pastor'){
+
+      if ($active == '0' || $active == '1') {
+
+        $filter_list = '';
+        
+        if ($role_id == '1' || $role_id == '6' || $role_id == '7') {
+
+          // if cell_id exist, else sector_id
+          $sql = "SELECT CONCAT(user.first_name, ' ', user.last_name) as full_name, IF(user_groups.district_id IS NOT NULL, CONCAT('D',(SELECT groups_districts.district_code FROM groups_districts where groups_districts.id = user_groups.district_id and groups_districts.church_id = $church_id)), '--') as district, user.city, IF(user_groups.district_id != 'NULL', (SELECT count(groups_zones.zone_pastor) from groups_zones where groups_zones.district_id = user_groups.district_id and groups_zones.church_id = $church_id), '0') as zone_pastors, IF(user_groups.district_id != 'NULL', (SELECT count(groups_sectors.supervisor) from groups_sectors, groups_zones where groups_zones.district_id = user_groups.district_id and groups_sectors.zone_id = groups_zones.id and groups_sectors.church_id = $church_id), '0') as supervisors, IF(user_groups.district_id != 'NULL', (SELECT count(groups_cells.leader) from groups_cells, groups_sectors, groups_zones where groups_zones.district_id = user_groups.district_id and groups_sectors.zone_id = groups_zones.id and groups_cells.sector_id = groups_sectors.id and groups_cells.church_id = $church_id), '0') as leaders, IF(user_groups.district_id != 'NULL', ((SELECT count(members_cells.id) from members_cells, groups_cells, groups_sectors, groups_zones WHERE members_cells.church_id = $church_id AND groups_zones.district_id = user_groups.district_id AND members_cells.cell_id = groups_cells.id AND groups_cells.sector_id = groups_sectors.id AND groups_sectors.zone_id = groups_zones.id AND groups_cells.church_id = $church_id AND groups_sectors.church_id = $church_id AND members_cells.role !='1' AND members_cells.active = '1')), '0') as members FROM user, user_groups WHERE user.id=user_groups.user_id AND user.rol = 2 AND user.church_id = $church_id AND user.verified_account = '1' AND user.status = $active";
+          
+
+        } else{ // else role not exist
+
+            return $response->withStatus(422)
+                    ->withHeader('Content-Type', 'application/json')
+                    ->withJson(array('error' => array(
+                        "message"=>"rol no existe",
+                        "status"=>422)));
+        }
+
+        // DOWNLOADS
+        if ($type_report == 'csv') {
+          
+          $stream = fopen('php://memory', 'w+');
+
+          $row = array('DISTRICT PASTOR', 'DISTRICT','CITY','ZONE PASTORS','SUPERVISORS','LEADERS','MEMBERS');
+          fputcsv($stream, $row, ';');
+
+          foreach ($con->query($sql) as $row) {
+            if ($row['full_name'] == ' ') {
+              $row['full_name'] = '--';
+            }
+            if ($row['city'] == null) {
+              $row['city'] = '--';
+            }
+            $district_pastors[] = $row;
+            fputcsv($stream, $row, ';');
+
+          }
+          
+          rewind($stream);
+
+          $response = $response->withHeader('Content-Type', 'text/csv');
+          $response = $response->withHeader('Content-Disposition', 'attachment; filename="district_pastors_list.csv"');
+
+          return $response->withBody(new \Slim\Http\Stream($stream));
+
+        } else if ($type_report == 'pdf'){
+
+          // create new PDF document
+          $pdf = new TCPDF(PDF_PAGE_ORIENTATION, PDF_UNIT, PDF_PAGE_FORMAT, true, 'UTF-8', false);
+
+          // set document information
+          $pdf->SetCreator('PDF');
+          $pdf->SetAuthor('C+');
+          $pdf->SetTitle('District Pastors List');
+          $pdf->SetSubject('District Pastors List');
+          $pdf->SetKeywords('');
+
+          // set default header data
+          $pdf->SetHeaderData('cells.png', '10', "", "", array(0,64,255), array(0,64,128));
+          $pdf->setFooterData(array(0,64,0), array(0,64,128));
+
+          // set header and footer fonts
+          $pdf->setHeaderFont(Array(PDF_FONT_NAME_MAIN, '', PDF_FONT_SIZE_MAIN));
+          $pdf->setFooterFont(Array(PDF_FONT_NAME_DATA, '', PDF_FONT_SIZE_DATA));
+
+          // set default monospaced font
+          $pdf->SetDefaultMonospacedFont(PDF_FONT_MONOSPACED);
+
+          // set margins
+          $pdf->SetMargins(PDF_MARGIN_LEFT, PDF_MARGIN_TOP, PDF_MARGIN_RIGHT);
+          $pdf->SetHeaderMargin(PDF_MARGIN_HEADER);
+          $pdf->SetFooterMargin(PDF_MARGIN_FOOTER);
+
+          // set auto page breaks
+          $pdf->SetAutoPageBreak(TRUE, PDF_MARGIN_BOTTOM);
+
+          // set image scale factor
+          $pdf->setImageScale(PDF_IMAGE_SCALE_RATIO);
+
+          // set default font subsetting mode
+          $pdf->setFontSubsetting(true);
+
+          // Set font
+          $pdf->SetFont('helvetica', '', 12, '', true);
+
+          // Add a page
+          $pdf->AddPage();
+
+          // Set some content to print
+          $html ='
+          <p style="font-size: 10px;"><b>' .$church_name. '</b><br><b>City:</b> ' .$church_city. '</p><p style="color: #363636; font-size: 11px;"><b>District Pastors List</b><br>Exported: ' .$final_date. '</p>
+          <table style="font-size: 11px; width: 100%;" cellspacing="0" cellpadding="10"><tr>
+          <th width= "130" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>DISTRICT PASTOR</b></th>
+          <th  width= "70" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>DISTRICT</b></th>
+          <th width= "105" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>CITY</b></th>
+          <th width="70" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>ZONE PASTORS</b></th>
+          <th width="100" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>SUPERVISORS</b></th>
+          <th width="75" style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>LEADERS</b></th>
+          <th width="80"style="border-bottom: 1px solid rgb(0,64,128); height: 20px; font-size: 10px;"><b>MEMBERS</b></th></tr>';
+
+          foreach ($con->query($sql) as $row) {
+            if ($row['full_name'] == ' ') {
+              $row['full_name'] = '--';
+            }
+            if ($row['city'] == null) {
+              $row['city'] = '--';
+            }
+            $html.='
+                <tr>
+                  <td style="height: 30px;">' . $row['full_name'] . '</td>
+                  <td style="height: 30px;">' . $row['district'] . '</td>
+                  <td style="height: 30px;">' . $row['city'] . '</td>
+                  <td style="height: 30px;">' . $row['zone_pastors'] . '</td>
+                  <td style="height: 30px;">' . $row['supervisors'] . '</td>
+                  <td style="height: 30px;">' . $row['leaders'] . '</td>
+                  <td style="height: 30px;">' . $row['members'] . '</td>
+                </tr>';
+          }
+          $html.='</table>';
+
+          // Print text using writeHTML
+          $pdf->writeHTML($html, true, false, false, false, '');
+
+          // Close and output PDF document
+          $pdf->Output('district_pastors_list.pdf', 'D');
+
+        }else{
+          return $response->withStatus(422)
+                          ->withHeader('Content-Type', 'application/json')
+                          ->withJson(array('error' => array(
+                                    "message"=>"Type report does not exist",
+                                    "status"=>422)));
+        }
+
+
+      } else{
+        return $response->withStatus(422)
+                ->withHeader('Content-Type', 'application/json')
+                ->withJson(array('error' => array(
+                    "message"=>"Filter active does not exist",
+                    "status"=>422)));
+      }
+
+
+    } else{
+      return $response->withStatus(422)
+              ->withHeader('Content-Type', 'application/json')
+              ->withJson(array('error' => array(
+                    "message"=>"Type member does not exist",
+                    "status"=>422)));
+    }
+
+  }else{
+    return $response->withStatus(422)
+            ->withHeader('Content-Type', 'application/json')
+            ->withJson(array('error' => array(
+                "message"=>"User with this role does not exist",
+                "status"=>422)));
+  }
+
+
+ }
+ catch(\Exception $ex){
+   return $response->withJson(array('error' => array(
+                "message"=> $ex->getMessage(),
+                "status"=>422)),422);
+ }
+
+});
+
 
 /******* TESTS ********/
 $app->post('/send-mail', function ($request,$response) {
@@ -65636,7 +66416,7 @@ $app->post('/send-mail', function ($request,$response) {
 
 /*********** General functions ***********/
 
-function sendEmail($bodyMail,$email,$subject){
+function sendEmail($bodyMail,$email,$subject,$name,$password,$host,$church_id,$type){
 
   $url = "http://newcelulasapi.toolboxsv.com/general/send-mail";
 
@@ -65647,7 +66427,7 @@ function sendEmail($bodyMail,$email,$subject){
   curl_setopt($ch, CURLOPT_TIMEOUT, 10);
   curl_setopt($ch, CURLOPT_POST, 1);
   curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
-  curl_setopt($ch, CURLOPT_POSTFIELDS, "bodyMail=$bodyMail&email=$email&subject=$subject");
+  curl_setopt($ch, CURLOPT_POSTFIELDS, "bodyMail=$bodyMail&email=$email&subject=$subject&name=$name&password=$password&host=$host&church_id=$church_id&type=$type");
   curl_setopt($ch, CURLOPT_CUSTOMREQUEST, 'POST');
 
   $result = curl_exec($ch);
