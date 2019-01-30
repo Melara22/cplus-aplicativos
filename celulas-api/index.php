@@ -59560,6 +59560,7 @@ $app->post('/download/report-list', function ($request,$response) {
 
   $mpdf = new \Mpdf\Mpdf([
     'mode' => 'utf-8',
+    'tempDir' => __DIR__ . '/custom/temp/dir/path',
     'margin_left' => 13,
     'margin_right' => 13,
     'margin_top' => 10,
@@ -59772,6 +59773,7 @@ $app->post('/download/report', function ($request,$response) {
 
       $mpdf = new \Mpdf\Mpdf([
         'mode' => 'utf-8',
+        'tempDir' => __DIR__ . '/custom/temp/dir/path',
         'margin_left' => 13,
         'margin_right' => 13,
         'margin_top' => 10,
@@ -59948,6 +59950,7 @@ $app->get('/download-test', function ($request,$response) {
   
   $mpdf = new \Mpdf\Mpdf([
     'mode' => 'utf-8',
+    'tempDir' => __DIR__ . '/custom/temp/dir/path',
     'margin_left' => 13,
     'margin_right' => 13,
     'margin_top' => 10,
@@ -61738,6 +61741,87 @@ $app->post('/members/guests/add', function ($request,$response) {
         $result_details = $pre_details->execute($values_details);
       }
       
+      // get final guest information
+      $final_info = $con->prepare("SELECT id, cell_id, CONCAT(first_name, ' ', last_name) AS full_name, first_name, last_name, email, phone, profile_picture, address, latitude, longitude, latitude_delta, longitude_delta, postal_code, city, gender, birth_date, role, marital_status, married_since, guest_since, is_complete FROM members_cells WHERE id = :guest_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+      $fvalues = array(':guest_id' => $id_m);
+      $final_info->execute($fvalues);
+      $fresult = $final_info->fetch();
+
+      if ($fresult) {
+
+        $fcell_id = $fresult['cell_id'];
+
+        // Select cell codes
+        $sql_gro = "SELECT cell_code, sector_code, zone_code, district_code, (SELECT CONCAT(first_name, ' ', last_name) FROM user where id = groups_cells.leader) as leader FROM groups_cells WHERE id = :cell_id AND church_id = :church_id";
+        $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_gro = array(
+          ':cell_id' => $fcell_id,
+          ':church_id' => $church_id
+          );
+        
+        $result_gro = $pre_gro->execute($values_gro);
+        $result_gro = $pre_gro->fetch();
+
+        // get steps
+        $get_steps = "SELECT members_cells_steps.step_id,steps.step_name,members_cells_steps.step_date
+                FROM members_cells_steps, steps
+                WHERE members_cells_steps.step_id = steps.step_id AND member_id = $id_m ORDER BY step_id";
+
+        $steps = null;
+
+        foreach ($con->query($get_steps) as $row) {
+          $steps[] = $row;
+        }
+
+        // verified if have two steps
+        $pre_steps = $con->prepare("SELECT count(member_id) as step_count FROM members_cells_steps WHERE member_id = :member_id AND step_id in (1, 2)", array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+
+        $values_steps = array(':member_id' => $id_m);
+        $pre_steps->execute($values_steps);
+        $result_steps = $pre_steps->fetch();
+
+        if ($result_steps['step_count'] == '2') {
+          $promote = '1';
+        }else{
+          $promote = '0';
+        }
+
+        $finalObject = array(
+          "guest_id" => $fresult['id'],
+          "full_name" => $fresult['full_name'],
+          "first_name" => $fresult['first_name'],
+          "last_name" => $fresult['last_name'],
+          "email" => $fresult['email'],
+          "phone" => $fresult['phone'],
+          "address" => $fresult['address'],
+          "latitude" => $fresult['latitude'],
+          "longitude" => $fresult['longitude'],
+          "latitude_delta" => $fresult['latitude_delta'],
+          "longitude_delta" => $fresult['longitude_delta'],
+          "postal_code" => $fresult['postal_code'],
+          "city" => $fresult['city'],
+          "gender" => $fresult['gender'],
+          "birth_date" => $fresult['birth_date'],
+          "marital_status" => $fresult['marital_status'],
+          "married_since" => $fresult['married_since'],
+          "guest_since" => $fresult['guest_since'],
+          "profile_picture" => $fresult['profile_picture'],
+          "role_id" => $fresult['role'],
+          "is_complete" => $fresult['is_complete'],
+          'cell_code' => $result_gro['cell_code'],
+          'sector_code' => $result_gro['sector_code'],
+          'zone_code' => $result_gro['zone_code'],
+          'district_code' => $result_gro['district_code'],
+          'leader' => $result_gro['leader'],
+          "steps" => $steps,
+          "total_steps" => '2',
+          "promote" => $promote
+        );
+
+      }
+      
 
       /*************** ACTIVITIES ***********************/
 
@@ -61841,7 +61925,7 @@ $app->post('/members/guests/add', function ($request,$response) {
 
       return $response->withStatus(200)
                         ->withHeader('Content-Type', 'application/json')
-                        ->withJson(array('response' => 'Invitado guardado con éxito'));
+                        ->withJson(array('response' => $finalObject));
         
     }else{   
         return $response->withStatus(422)
@@ -63833,6 +63917,76 @@ $app->post('/members/cell-members/add', function ($request,$response) {
 
         $result_details = $pre_details->execute($values_details);
       }
+
+      // get final member information
+      $final_info = $con->prepare("SELECT id, cell_id, CONCAT(IFNULL(first_name,''),' ',IFNULL(last_name,'')) AS full_name, first_name, last_name, email, phone, profile_picture, address, latitude, longitude, latitude_delta, longitude_delta, postal_code, city, gender, birth_date, role, marital_status, married_since, guest_since, member_since, exelerate_id, is_complete FROM members_cells WHERE id = :member_id AND church_id = :church_id",array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+  
+      $fvalues = array(':member_id' => $id_m, ':church_id' => $church_id);
+      $final_info->execute($fvalues);
+      $fresult = $final_info->fetch();
+  
+      if ($fresult) {
+  
+        $fcell_id = $fresult['cell_id'];
+  
+        // Select cell codes
+        $sql_gro = "SELECT cell_code, sector_code, zone_code, district_code, (SELECT CONCAT(IFNULL(first_name,''),' ',IFNULL(last_name,'')) FROM user where id = groups_cells.leader) as leader FROM groups_cells WHERE id = :cell_id AND church_id = :church_id";
+        $pre_gro  = $con->prepare($sql_gro, array(PDO::ATTR_CURSOR => PDO::CURSOR_FWDONLY));
+  
+        $values_gro = array(
+          ':cell_id' => $fcell_id,
+          ':church_id' => $church_id
+          );
+        
+        $result_gro = $pre_gro->execute($values_gro);
+        $result_gro = $pre_gro->fetch();
+  
+        // get steps
+        $get_steps = "SELECT members_cells_steps.step_id,steps.step_name,members_cells_steps.step_date
+                FROM members_cells_steps, steps
+                WHERE members_cells_steps.step_id = steps.step_id AND member_id = $id_m ORDER BY step_id";
+  
+        $steps = null;
+  
+        foreach ($con->query($get_steps) as $row) {
+          $steps[] = $row;
+        }
+  
+  
+        $finalObject = array(
+          "member_id" => $fresult['id'],
+          "full_name" => $fresult['full_name'],
+          "first_name" => $fresult['first_name'],
+          "last_name" => $fresult['last_name'],
+          "email" => $fresult['email'],
+          "phone" => $fresult['phone'],
+          "address" => $fresult['address'],
+          "latitude" => $fresult['latitude'],
+          "longitude" => $fresult['longitude'],
+          "latitude_delta" => $fresult['latitude_delta'],
+          "longitude_delta" => $fresult['longitude_delta'],
+          "postal_code" => $fresult['postal_code'],
+          "city" => $fresult['city'],
+          "gender" => $fresult['gender'],
+          "birth_date" => $fresult['birth_date'],
+          "marital_status" => $fresult['marital_status'],
+          "married_since" => $fresult['married_since'],
+          "guest_since" => $fresult['guest_since'],
+          "member_since" => $fresult['member_since'],
+          "exelerate_id" => $fresult['exelerate_id'],
+          "profile_picture" => $fresult['profile_picture'],
+          "role_id" => $fresult['role'],
+          "is_complete" => $fresult['is_complete'],
+          'cell_code' => $result_gro['cell_code'],
+          'sector_code' => $result_gro['sector_code'],
+          'zone_code' => $result_gro['zone_code'],
+          'district_code' => $result_gro['district_code'],
+          'leader' => $result_gro['leader'],
+          "steps" => $steps,
+          "total_steps" => '4'
+        );
+  
+      }
       
 
       /*************** ACTIVITIES ***********************/
@@ -63937,7 +64091,7 @@ $app->post('/members/cell-members/add', function ($request,$response) {
 
       return $response->withStatus(200)
                         ->withHeader('Content-Type', 'application/json')
-                        ->withJson(array('response' => 'Miembro guardado con éxito'));
+                        ->withJson(array('response' => $finalObject));
         
     }else{   
         return $response->withStatus(422)
@@ -65317,6 +65471,7 @@ $app->post('/download/member-list', function ($request,$response) {
 
         $mpdf = new \Mpdf\Mpdf([
           'mode' => 'utf-8',
+          'tempDir' => __DIR__ . '/custom/temp/dir/path',
           'margin_left' => 13,
           'margin_right' => 13,
           'margin_top' => 10,
@@ -65604,6 +65759,7 @@ $app->post('/download/member-list', function ($request,$response) {
 
       $mpdf = new \Mpdf\Mpdf([
         'mode' => 'utf-8',
+        'tempDir' => __DIR__ . '/custom/temp/dir/path',
         'margin_left' => 13,
         'margin_right' => 13,
         'margin_top' => 10,
